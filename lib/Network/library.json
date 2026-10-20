@@ -1,0 +1,11 @@
+{
+  "name": "Network",
+  "version": "3.3.12",
+  "description": "ESP32 Arduino core 3.x Network abstraction layer (vendored from framework so PlatformIO links it)",
+  "keywords": "network, wifi, esp32",
+  "frameworks": "arduino",
+  "platforms": "espressif32",
+  "build": {
+    "srcFilter": "+<*.cpp>"
+  }
+}
