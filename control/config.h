@@ -9,6 +9,10 @@ struct Config {
   // ---- chassis and mounts -------------------------------------------------
   float L_wb     = 0.18f;   // wheelbase [m]                              PLACEHOLDER
   float L_car    = 0.25f;   // car length [m]                             PLACEHOLDER
+  float t_front  = 0.15f;   // front track width [m]                      PLACEHOLDER
+                             // Sets the inner/outer split and the delta_eq
+                             // limit. Only ackermann.h needs it; the bicycle
+                             // plant does not.
   float d_L      = 0.10f;   // left sensor, ahead of rear axle [m]        measured
   float d_R      = 0.10f;   // right sensor, behind rear axle [m]         measured
   float e_L      = 0.00f;   // left sensor lateral offset, + = left of centreline [m]  PLACEHOLDER
