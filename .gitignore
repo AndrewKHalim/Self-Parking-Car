@@ -1,0 +1,9 @@
+# Regenerable. Do not commit.
+.pio/
+.venv/
+build/
+
+# Host tooling
+*.o
+*.pyc
+__pycache__/
