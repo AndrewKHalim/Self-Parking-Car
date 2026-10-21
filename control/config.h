@@ -6,22 +6,16 @@
 // they are measured at run time from the sensors (see supervisor.h).
 
 // How the front wheels are steered. The chassis has not been measured, so
-// this is a switch and not a fact. The controller works in the equivalent
-// angle either way, because the bicycle model is exact for the turn radius
-// and both kinds of steering give the same radius. What the switch changes
-// is the limit: with Ackermann steering the inner wheel takes more lock than
-// the equivalent angle, so it reaches its own stop first and the equivalent
-// angle is held below what the wheel can do. ---
+// this is a switch. The geometry is the same either way; the limit is not,
+// because with Ackermann steering the inner wheel reaches its stop first. ---
 enum class SteerModel {
   PARALLEL,   // both front wheels at the same angle
   ACKERMANN,  // the wheels follow the Ackermann relation
 };
 // end
 
-// The motor driver. The board was built for a DRV8833 and an LM298 is being
-// discussed. The truth table is the same for both, so the firmware does not
-// branch on it: one pin high and the other low drives, both high brakes fast,
-// both low brakes slowly. What differs is the voltage the driver drops, and
+// The motor driver. Both drivers have the same truth table, so the firmware
+// does not branch on it. What differs is the voltage the driver drops, and
 // that is the speed the car does. ---
 enum class MotorDriver {
   DRV8833,
@@ -30,10 +24,8 @@ enum class MotorDriver {
 // end
 
 // What the driver does to the drive: the voltage it drops at the drive
-// current, and the deceleration it brakes at. The drops are the datasheet
-// figures at about one amp. The brake figures are placeholders, because
-// neither driver has been measured on this car, and the stopping distance
-// is what has to come off the bench. ---
+// current, and the deceleration it brakes at. The drops are datasheet
+// figures at about an amp, the brake figures are placeholders. ---
 struct DriveModel {
   float drop;        // V
   float brakeDecel;  // m/s^2
@@ -47,9 +39,7 @@ inline DriveModel driveModel(MotorDriver d) {
 
 struct Config {
   // Chassis and mounts, all in metres. L_wb is the wheelbase, L_car the car
-  // length and t_front the front track width. All three are placeholders.
-  // t_front sets the inner and outer split and the delta_eq limit, and only
-  // ackermann.h needs it. ---
+  // length and t_front the front track. All three are placeholders. ---
   float L_wb     = 0.18f;
   float L_car    = 0.25f;
   float t_front  = 0.15f;
@@ -72,33 +62,25 @@ struct Config {
   float e_out_R  = 0.010f;
   // end
 
-  // The steering and the drive. Both are switches, because neither the
-  // chassis nor the driver has been measured, and the README is not
-  // evidence. ---
+  // The steering and the drive. Both are switches until the chassis and the
+  // driver have been measured. ---
   SteerModel steer_model = SteerModel::PARALLEL;
   MotorDriver motor_driver = MotorDriver::DRV8833;
   // end
 
-  // The supply the motor runs on, and how much of it the driver takes. A
-  // DC motor's speed follows the voltage across it, so the LM298 runs the
-  // car at about two thirds of the speed the DRV8833 does on the same pack.
-  // The supply is a placeholder until the pack is known. ---
+  // The supply the motor runs on. A placeholder until the pack is known. ---
   float motor_supply = 7.4f;
   // end
 
   // How much the front wheels drag in a turn when they are not steered to
-  // the Ackermann relation. It is a rolling-resistance-like term, and on a
-  // car this size it is worth well under a percent of the speed, which is
-  // the point of measuring it rather than assuming it matters. ---
+  // the Ackermann relation. ---
   float scrub_gain = 0.05f;
   // end
 
   // Run-time calibration. S0 is the sensor sum with the car squared up, and
   // trim is the half difference of the two readings when the car is centred.
-  // calib_samples is how many readings are averaged to get them, because a
-  // single reading carries the whole sensor noise into the estimate for the
-  // rest of the run. speed and d_stop are measured on the bench and are still
-  // placeholders. ---
+  // calib_samples readings are averaged, because one carries the whole sensor
+  // noise into the estimate for the rest of the run. ---
   float S0        = 0.0f;
   float trim      = 0.0f;
   int   calib_samples = 32;
@@ -110,10 +92,10 @@ struct Config {
   // tolerances, and both get widened at run time when the measured sensor
   // noise calls for it. rear_target is the wanted gap to the rear wall and
   // rear_margin covers sensor latency and overshoot. dwell is how many
-  // consecutive ticks a
-  // transition has to hold, max_strokes is the correction budget, stroke_dir
-  // is +1 to run strokes forward out of the bay, brake_settle is the wait
-  // after braking, and stroke_timeout is a hard limit on one stroke. ---
+  // consecutive ticks a transition has to hold, max_strokes is the correction
+  // budget, stroke_dir is +1 to run strokes forward out of the bay,
+  // brake_settle is the wait after braking, and stroke_timeout is a hard
+  // limit on one stroke. ---
   float tol_off      = 0.010f;
   float tol_align    = 0.061f;
   float rear_target  = 0.050f;
@@ -126,12 +108,10 @@ struct Config {
   // end
 
   // The watchdogs. The rear sensor is the only thing between the car and the
-  // wall, so an unusable rear reading stops the car after rear_fault_ticks
-  // ticks instead of letting it reverse blind. back_in_max_travel is the
-  // furthest the car may reverse in the whole manoeuvre, estimated from the
-  // commanded speed because there is no odometer, and it is the backstop for
-  // a rear reading that is valid but wrong. stroke_invalid_ticks is how many
-  // consecutive unusable side readings end a stroke. ---
+  // wall, so an unusable rear reading stops the car. back_in_max_travel is
+  // the furthest the car may reverse, estimated from the commanded speed
+  // because there is no odometer, and it is the backstop for a rear reading
+  // that is usable but wrong. ---
   int   rear_fault_ticks = 3;
   float back_in_max_travel = 2.5f;
   int   stroke_invalid_ticks = 2;

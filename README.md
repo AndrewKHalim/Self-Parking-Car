@@ -41,59 +41,61 @@ Leave GPIO 26 to 32 alone: the octal PSRAM claims them. GPIO 19 and 20 are the
 USB pins, and GPIO 0, 3, 45 and 46 are strapping pins that are sampled at
 boot.
 
-## Building it
+## Instructions
+
+### 1. The toolchain
 
 ```bash
-# the firmware
-.venv/bin/pio run          # an incremental build takes a few seconds, a clean
-                            # one takes about 13 minutes
-.venv/bin/pio run -t upload # flash it, with the board connected
-
-# the host simulator, which needs no PlatformIO
-g++ -std=c++17 -O2 -Wall -Wextra -Icontrol -o build/sim tools/sim_main.cpp -lm
-g++ -std=c++17 -O2 -Wall -Wextra -Icontrol -o build/geom_checks tools/geom_checks.cpp -lm
-
-# the parameter sweep
-python3 tools/sweep.py --out build/sweep.csv
+python3 -m venv --without-pip .venv
+curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
+.venv/bin/python3 /tmp/get-pip.py
+.venv/bin/pio run
 ```
 
-Three things bite when the build runs on a fresh machine.
+The first build pulls the pinned platform and the toolchain, about 4GB and a
+few minutes. After that a build takes seconds. Each user needs their own
+`~/.platformio`, because it lives under `$HOME`.
 
-**PlatformIO's own environment has no pip.** The system Python has no
-`ensurepip` on some distributions, and PlatformIO creates its own environment
-under `~/.platformio/penv`. If the build fails before it compiles anything
-with
+If `pio` stops before it compiles anything with
 
 ```
 Error: Failed to install Python dependencies into penv
-Error: uv installation via pip failed with exit code 1
 ```
 
-then that environment needs pip:
+then PlatformIO's own environment needs pip:
 
 ```bash
 curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
 ~/.platformio/penv/bin/python3 /tmp/get-pip.py
 ```
 
-The project's own `.venv` is made the same way, with
-`python3 -m venv --without-pip` and then the same script.
+### 2. The firmware
 
-**`lib/Network/src` is committed source, not a symlink.** Arduino core 3.3.12
-ships `Network` with an Arduino IDE `library.properties` but no PlatformIO
-`library.json`, so PlatformIO will not build or link it on its own. `WiFi`
-then compiles against headers that resolve, and the link fails on undefined
-`NetworkInterface` symbols without pointing at the real cause. The fix is the
-committed copy in `lib/Network/src` with the hand-written `library.json` beside
-it. A symlink into `~/.platformio/packages/` is not an alternative: it is an
-absolute path into one machine's tree, and it resolves there and nowhere else.
-When the platform pin moves, re-copy the framework's `Network/src` over
-`lib/Network/src/`.
+```bash
+.venv/bin/pio run            # build
+.venv/bin/pio run -t upload  # flash it, with the board connected
+```
 
-**Each user needs their own `~/.platformio`.** It lives under `$HOME`, so
-another machine's home directory is not readable. That is normal, and the first
-build downloads about 4GB of platform and toolchain before it settles into
-seconds.
+`lib/Network/src` is committed source with a hand-written `library.json`
+beside it, because Arduino core 3.3.12 ships `Network` without one and
+PlatformIO will not link it. Leave it as it is: a symlink into
+`~/.platformio/packages/` resolves on the machine that made it and nowhere
+else.
+
+### 3. The host simulator
+
+No board needed. The control core has no hardware calls in it, so the same
+code runs on the host.
+
+```bash
+g++ -std=c++17 -O2 -Wall -Wextra -Icontrol -o build/sim tools/sim_main.cpp -lm
+g++ -std=c++17 -O2 -Wall -Wextra -Icontrol -o build/geom_checks tools/geom_checks.cpp -lm
+
+./build/geom_checks                             # the sensor geometry
+./build/sim --x 0.04 --psi 5 --trace            # one scenario, traced
+./build/sim --x 0.04 --psi 5 --steer ackermann  # the other steering model
+python3 tools/sweep.py --out build/sweep.csv    # the parameter sweep
+```
 
 ## How the manoeuvre runs
 

@@ -108,11 +108,9 @@ struct Control {
     // the car the other way when it is going backwards. ---
     float delta = -kg * sgn * (psiRef - lpfPsi);
 
-    // The steering limit. With Ackermann steering the inner wheel takes
-    // more lock than the equivalent angle, so it reaches its own stop
-    // first, and the equivalent angle the controller may ask for is held
-    // below what the wheel can deliver. With parallel steering both wheels
-    // are at the commanded angle and the wheel's own stop is the limit. ---
+    // The steering limit. With Ackermann steering the inner wheel reaches
+    // its own stop first, so the equivalent angle is held below what the
+    // wheel can deliver. ---
     const float limit = (c->steer_model == SteerModel::ACKERMANN)
                             ? ack::deltaEqMax(*c)
                             : c->delta_max;
