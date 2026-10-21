@@ -18,6 +18,7 @@
 #include <random>
 #include <string>
 
+#include "ackermann.h"
 #include "config.h"
 #include "control.h"
 #include "geometry.h"
@@ -82,6 +83,7 @@ struct Sim : Hal {
   float brakeDecel = 1.0f;
   // end
 
+
   std::mt19937 rng{1};
   std::normal_distribution<float> gauss{0.0f, 1.0f};
 
@@ -111,7 +113,8 @@ struct Sim : Hal {
 
     // The drive is on or off with a ramp, and the brake decelerates to a stop
     // and stays there. ---
-    float target = (motorDir > 0) ? cfg.speed : (motorDir < 0 ? -cfg.speed : 0.0f);
+    const float vMax = driveSpeed(cfg);
+    float target = (motorDir > 0) ? vMax : (motorDir < 0 ? -vMax : 0.0f);
     if (motorDir == 0) {
       float d = brakeDecel * dt;
       if (fabsf(v) <= d) v = 0.0f;
@@ -125,9 +128,37 @@ struct Sim : Hal {
 
     // Kinematics at the rear axle. The car's forward axis points out of the
     // bay, so reversing drives it in towards the rear wall. ---
-    psi += -v * tanf(delta) / cfg.L_wb * dt;
+    //
+    // The turn comes from the front wheels. With Ackermann steering they
+    // follow the relation and the radius the two of them agree on is the
+    // radius the car turns at, which is the radius the bicycle model gives.
+    // With parallel steering both wheels are at the commanded angle and the
+    // radius is the same one, because a car with a fixed rear axle turns
+    // about a point on the rear axle line whatever the front wheels do. The
+    // two therefore differ in the scrub and not in the geometry. ---
+    float yaw;
+    if (cfg.steer_model == SteerModel::ACKERMANN) {
+      const float din = ack::deltaIn(cfg, delta);
+      const float dout = ack::deltaOut(cfg, delta);
+      const float ci = 1.0f / tanf(din);
+      const float co = 1.0f / tanf(dout);
+      yaw = -v * 2.0f / (cfg.L_wb * (ci + co));
+    } else {
+      yaw = -v * tanf(delta) / cfg.L_wb;
+    }
+    psi += yaw * dt;
     x += v * sinf(psi) * dt;
     y += v * cosf(psi) * dt;
+
+    // Parallel steering drags the front wheels sideways in every turn, and
+    // Ackermann steering does not. ---
+    if (cfg.steer_model == SteerModel::PARALLEL) {
+      const float slip = fabsf(v) * fabsf(tanf(delta)) * cfg.t_front
+                       / (2.0f * cfg.L_wb);
+      const float sgn = (v > 0.0f) ? 1.0f : ((v < 0.0f) ? -1.0f : 0.0f);
+      v -= sgn * cfg.scrub_gain * slip * dt;
+    }
+    // end
 
     float apsi = fabsf(psi);
     if (apsi > peakPsi) peakPsi = apsi;
@@ -193,6 +224,7 @@ struct Result {
   bool hitWall = false;
   bool rearFault = false;
   bool travelFault = false;
+  bool outOfSpec = false;
   float finalX = 0, finalPsi = 0, finalRear = 0;
   float minClear = 0, minRear = 0, peakPsi = 0, travel = 0, reverse = 0;
   int strokes = 0;
@@ -203,7 +235,8 @@ struct Result {
 static Result runScenario(const Config& base, float x0, float psi0, float W,
                           float D, float v, float noise, unsigned seed,
                           float tmax = 40.0f, bool trace = false,
-                          float faultRearAt = -1.0f, float faultSideAt = -1.0f) {
+                          float faultRearAt = -1.0f, float faultSideAt = -1.0f,
+                          float calX = 0.0f, float calPsi = 0.0f) {
   Config cfg = base;
   cfg.speed = v;
 
@@ -212,6 +245,7 @@ static Result runScenario(const Config& base, float x0, float psi0, float W,
   sim.W = W;
   sim.D = D;
   sim.noise = noise;
+  sim.brakeDecel = driveModel(cfg.motor_driver).brakeDecel;
   sim.rng.seed(seed);
   sim.faultRearAt = faultRearAt;
   sim.faultSideAt = faultSideAt;
@@ -224,8 +258,8 @@ static Result runScenario(const Config& base, float x0, float psi0, float W,
   // Calibration step: the car is parked centred and squared up, and the
   // controller averages a batch of readings for S0 and the zero-offset trim.
   // One reading per tick, so the supervisor is run until it has them. ---
-  sim.x = 0.0f;
-  sim.psi = 0.0f;
+  sim.x = calX;
+  sim.psi = calPsi;
   sim.y = 0.5f * D;
   sup.calibrate();
   int calibTicks = 0;
@@ -317,6 +351,7 @@ static Result runScenario(const Config& base, float x0, float psi0, float W,
   r.hitWall = sim.hitWall;
   r.rearFault = sup.tel.rearFault;
   r.travelFault = sup.tel.travelFault;
+  r.outOfSpec = sup.tel.outOfSpec;
   r.travel = sim.travel;
   r.reverse = sup.tel.travel;
 
@@ -337,6 +372,8 @@ int main(int argc, char** argv) {
   bool csv = false;
   bool trace = false;
   float faultRearAt = -1.0f, faultSideAt = -1.0f;
+  float calX = 0.0f, calPsi = 0.0f;
+  std::string steer = "parallel", driver = "drv8833";
 
   for (int i = 1; i < argc; i++) {
     std::string a = argv[i];
@@ -355,35 +392,45 @@ int main(int argc, char** argv) {
     else if (a == "--omega") cfg.omega_n = next();
     else if (a == "--zeta") cfg.zeta = next();
     else if (a == "--d-stop") cfg.d_stop = next();
+    else if (a == "--steer") steer = argv[++i];
+    else if (a == "--driver") driver = argv[++i];
     else if (a == "--fault-rear-at") faultRearAt = next();
+    else if (a == "--cal-x") calX = next();
+    else if (a == "--cal-psi") calPsi = next() * kDeg;
     else if (a == "--fault-side-at") faultSideAt = next();
   }
 
+  if (steer == "ackermann") cfg.steer_model = SteerModel::ACKERMANN;
+  if (driver == "lm298") cfg.motor_driver = MotorDriver::LM298;
+
   Result r = runScenario(cfg, x0, psi0, W, D, v, noise, seed, 40.0f, trace,
-                         faultRearAt, faultSideAt);
+                         faultRearAt, faultSideAt, calX, calPsi);
 
   if (csv) {
     printf("x0,psi0,W,D,v,noise,seed,finalX,finalPsi,finalRear,minClear,"
            "minRear,peakPsi,travel,reverse,strokes,centred,aligned,rearOk,"
-           "hitWall,gaveUp,timedOut,rearFault,travelFault\n");
+           "hitWall,gaveUp,timedOut,rearFault,travelFault,outOfSpec\n");
     printf("%.4f,%.3f,%.3f,%.3f,%.3f,%.4f,%u,%.4f,%.3f,%.4f,%.4f,%.4f,%.3f,"
-           "%.4f,%.4f,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+           "%.4f,%.4f,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
            x0, psi0 / kDeg, W, D, v, noise, seed, r.finalX, r.finalPsi / kDeg,
            r.finalRear, r.minClear, r.minRear, r.peakPsi / kDeg, r.travel,
            r.reverse, r.strokes, r.centred, r.aligned, r.rearOk, r.hitWall,
-           r.gaveUp, r.timedOut, r.rearFault, r.travelFault);
+           r.gaveUp, r.timedOut, r.rearFault, r.travelFault, r.outOfSpec);
   } else {
-    printf("scenario: x0=%.1fcm psi0=%.1fdeg bay=%.0fx%.0fcm v=%.2f noise=%.1fmm\n",
-           x0 * 100, psi0 / kDeg, W * 100, D * 100, v, noise * 1000);
+    printf("scenario: x0=%.1fcm psi0=%.1fdeg bay=%.0fx%.0fcm v=%.2f noise=%.1fmm "
+           "steer=%s driver=%s\n",
+           x0 * 100, psi0 / kDeg, W * 100, D * 100, v, noise * 1000,
+           (cfg.steer_model == SteerModel::ACKERMANN) ? "ackermann" : "parallel",
+           (cfg.motor_driver == MotorDriver::LM298) ? "lm298" : "drv8833");
     printf("  final   x=%.1fmm psi=%.2fdeg rear=%.0fmm\n", r.finalX * 1000,
            r.finalPsi / kDeg, r.finalRear * 1000);
     printf("  strokes %d   peak yaw %.1fdeg   min clearance %.0fmm   "
            "travel %.2fm   reverse %.2fm\n",
            r.strokes, r.peakPsi / kDeg, r.minClear * 1000, r.travel, r.reverse);
     printf("  centred=%d aligned=%d rear_ok=%d hit_wall=%d gave_up=%d "
-           "timeout=%d rear_fault=%d travel_fault=%d\n",
+           "timeout=%d rear_fault=%d travel_fault=%d out_of_spec=%d\n",
            r.centred, r.aligned, r.rearOk, r.hitWall, r.gaveUp, r.timedOut,
-           r.rearFault, r.travelFault);
+           r.rearFault, r.travelFault, r.outOfSpec);
   }
   return 0;
 }

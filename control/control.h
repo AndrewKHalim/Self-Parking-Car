@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "ackermann.h"
 #include "config.h"
 
 // The steering loop.
@@ -107,8 +108,16 @@ struct Control {
     // the car the other way when it is going backwards. ---
     float delta = -kg * sgn * (psiRef - lpfPsi);
 
-    if (delta > c->delta_max) delta = c->delta_max;
-    if (delta < -c->delta_max) delta = -c->delta_max;
+    // The steering limit. With Ackermann steering the inner wheel takes
+    // more lock than the equivalent angle, so it reaches its own stop
+    // first, and the equivalent angle the controller may ask for is held
+    // below what the wheel can deliver. With parallel steering both wheels
+    // are at the commanded angle and the wheel's own stop is the limit. ---
+    const float limit = (c->steer_model == SteerModel::ACKERMANN)
+                            ? ack::deltaEqMax(*c)
+                            : c->delta_max;
+    if (delta > limit) delta = limit;
+    if (delta < -limit) delta = -limit;
     return delta;
     // end
   }

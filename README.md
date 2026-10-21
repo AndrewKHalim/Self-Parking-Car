@@ -4,8 +4,9 @@ A small RC car reverses into a perpendicular parking bay, lines itself up with
 the bay walls, and stops before the rear obstacle. Steering is closed loop. A
 web dashboard plots the step response.
 
-Prototype of a car with Ackermann steering, using VL53L0X time-of-flight
-sensors for autonomous reverse parking.
+The car uses VL53L0X time-of-flight sensors for autonomous reverse parking.
+Its steering is described in the README as Ackermann, and the control code
+runs either kind of steering until someone measures the chassis.
 
 ## How the manoeuvre runs
 
@@ -15,13 +16,14 @@ and otherwise the inner loop does.
 
 ```mermaid
 flowchart TD
-    start([Power on]) --> cal["Park the car centred and squared up<br/>capture S0 and the trim"]
+    start([Power on]) --> cal["Park the car centred and squared up<br/>take 32 readings for S0 and the trim"]
     cal --> backin
 
     subgraph reversing ["BACK_IN: reverse into the bay"]
         backin["Inner loop holds the heading<br/>servo follows the controller"]
-        backin -->|"rear limit reached"| done["DONE<br/>motor off, brake on, steering centred"]
+        backin -->|"rear limit reached"| done["DONE<br/>motor off, brake on, steering centred<br/>the log says whether it landed in tolerance"]
         backin -->|"out of tolerance for 3 ticks"| correct
+        backin -->|"rear reading unusable"| giveup
         backin -->|"reading out of range"| backin
     end
 
@@ -29,6 +31,8 @@ flowchart TD
         correct{"Evaluate<br/>heading out of tolerance?"}
         correct -->|yes| rotate["Rotate stroke<br/>hold one lock until the heading moves"]
         correct -->|no| translate["Translate stroke<br/>S-curve: one lock, then the opposite"]
+        rotate -->|"side readings lost"| settle
+        translate -->|"side readings lost"| settle
         rotate --> settle
         translate --> settle
         settle["Settle<br/>brake, centre the wheels, wait for stillness"] --> correct
@@ -45,11 +49,17 @@ moved sideways with its heading where it started. The stroke stops on the
 measured excursion rather than on a timer, which is what makes it independent
 of the speed and of the battery.
 
+A stroke that loses the side readings stops, because the car may be against a
+wall and holding the lock makes that worse. The rear sensor gets the same
+treatment: an unusable reading stops the car unless the wall is simply out of
+the sensor's range, which the distance it has reversed since the last usable
+reading tells apart.
+
 ## How the sensing and steering fit together
 
 The state is referred to the rear axle centre, which is where the instant
-centre of rotation of an Ackermann vehicle lives. That is what lets one
-equivalent steer angle describe the whole vehicle.
+centre of rotation lives on any car with a fixed rear axle. That is what lets
+one equivalent steer angle describe the whole vehicle.
 
 ```mermaid
 flowchart LR
@@ -66,7 +76,7 @@ flowchart LR
     subgraph acting ["Acting"]
         ctl --> eq["delta_eq<br/>equivalent steer angle"]
         sup --> eq
-        eq --> ack["ackermann.h<br/>cotangent relations"]
+        eq --> ack["ackermann.h<br/>the two front wheel angles"]
         ack --> inner["inner wheel<br/>takes more lock"]
         ack --> outer["outer wheel<br/>takes less lock"]
     end
@@ -76,12 +86,26 @@ flowchart LR
         outer --> car
         car --> s1
     end
+
+    subgraph switches ["Switches, until the car has been measured"]
+        sw1["steer_model<br/>parallel or Ackermann<br/>sets the steering limit"] --> ack
+        sw2["motor_driver<br/>DRV8833 or LM298<br/>sets the speed and the braking"] --> car
+    end
 ```
 
-The controller works in one angle, `delta_eq`, and `ackermann.h` splits it
-across the two front wheels. The bicycle model in the simulator is exact for
-true Ackermann rather than an approximation, because the rear wheels are fixed
-and the whole vehicle state is already referenced to the rear axle centre.
+The controller works in one angle, `delta_eq`. The bicycle model in the
+simulator is exact for it rather than an approximation, because the rear
+wheels are fixed and the whole vehicle state is already referenced to the rear
+axle centre.
+
+Two things are switches rather than facts, because nobody has measured them
+yet. The steering model decides how much lock the car may be given: with
+Ackermann steering the inner wheel reaches its stop before the equivalent
+angle does, and the equivalent angle is held below that. The motor driver
+decides the speed and the stopping distance: the DRV8833 and the LM298 have
+the same truth table, so the firmware does not care which one is fitted, but
+the LM298 drops several volts across itself and would run the car at about
+two thirds of the speed.
 
 ## Where to look
 
@@ -99,8 +123,9 @@ and the whole vehicle state is already referenced to the rear axle centre.
 | `tools/sweep.py` | The parameter sweep, writes CSV and prints a summary |
 | `tools/geom_checks.cpp` | Direct checks of the sensor geometry, including the clearance interlock |
 
-The same `control/` code compiles against the real ESP32 HAL and against the
-host simulator, so the analysis can never drift from the firmware.
+The control core has no hardware calls in it, so the same code runs against
+the host simulator and against the ESP32 once the HAL adapter is written.
+Today only the simulator does.
 
 ## Status
 

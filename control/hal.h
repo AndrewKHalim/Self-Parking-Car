@@ -20,7 +20,12 @@ struct Hal {
   virtual void setServo(float deg) = 0;
   // end
 
-  // Drive command: 1 forward, -1 reverse, 0 brake (DRV8833 IN1=IN2=1). ---
+  // Drive command: 1 forward, -1 reverse, 0 brake. The DRV8833 and the LM298
+  // have the same truth table, so the firmware does not branch on which one
+  // is fitted: one pin high and the other low drives, both high brakes fast,
+  // both low brakes slowly. What differs between them is the voltage the
+  // driver drops and how hard it brakes, and those are in the config, not in
+  // the firmware. ---
   virtual void setMotor(int dir) = 0;
   // end
 };

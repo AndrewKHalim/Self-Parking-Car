@@ -5,6 +5,46 @@
 // The bay is made by hand, so its width and depth are not in this file at all:
 // they are measured at run time from the sensors (see supervisor.h).
 
+// How the front wheels are steered. The chassis has not been measured, so
+// this is a switch and not a fact. The controller works in the equivalent
+// angle either way, because the bicycle model is exact for the turn radius
+// and both kinds of steering give the same radius. What the switch changes
+// is the limit: with Ackermann steering the inner wheel takes more lock than
+// the equivalent angle, so it reaches its own stop first and the equivalent
+// angle is held below what the wheel can do. ---
+enum class SteerModel {
+  PARALLEL,   // both front wheels at the same angle
+  ACKERMANN,  // the wheels follow the Ackermann relation
+};
+// end
+
+// The motor driver. The board was built for a DRV8833 and an LM298 is being
+// discussed. The truth table is the same for both, so the firmware does not
+// branch on it: one pin high and the other low drives, both high brakes fast,
+// both low brakes slowly. What differs is the voltage the driver drops, and
+// that is the speed the car does. ---
+enum class MotorDriver {
+  DRV8833,
+  LM298,
+};
+// end
+
+// What the driver does to the drive: the voltage it drops at the drive
+// current, and the deceleration it brakes at. The drops are the datasheet
+// figures at about one amp. The brake figures are placeholders, because
+// neither driver has been measured on this car, and the stopping distance
+// is what has to come off the bench. ---
+struct DriveModel {
+  float drop;        // V
+  float brakeDecel;  // m/s^2
+};
+
+inline DriveModel driveModel(MotorDriver d) {
+  if (d == MotorDriver::LM298) return DriveModel{2.5f, 0.6f};
+  return DriveModel{0.5f, 1.0f};
+}
+// end
+
 struct Config {
   // Chassis and mounts, all in metres. L_wb is the wheelbase, L_car the car
   // length and t_front the front track width. All three are placeholders.
@@ -32,6 +72,27 @@ struct Config {
   float e_out_R  = 0.010f;
   // end
 
+  // The steering and the drive. Both are switches, because neither the
+  // chassis nor the driver has been measured, and the README is not
+  // evidence. ---
+  SteerModel steer_model = SteerModel::PARALLEL;
+  MotorDriver motor_driver = MotorDriver::DRV8833;
+  // end
+
+  // The supply the motor runs on, and how much of it the driver takes. A
+  // DC motor's speed follows the voltage across it, so the LM298 runs the
+  // car at about two thirds of the speed the DRV8833 does on the same pack.
+  // The supply is a placeholder until the pack is known. ---
+  float motor_supply = 7.4f;
+  // end
+
+  // How much the front wheels drag in a turn when they are not steered to
+  // the Ackermann relation. It is a rolling-resistance-like term, and on a
+  // car this size it is worth well under a percent of the speed, which is
+  // the point of measuring it rather than assuming it matters. ---
+  float scrub_gain = 0.05f;
+  // end
+
   // Run-time calibration. S0 is the sensor sum with the car squared up, and
   // trim is the half difference of the two readings when the car is centred.
   // calib_samples is how many readings are averaged to get them, because a
@@ -47,9 +108,9 @@ struct Config {
 
   // Supervisor limits. tol_off and tol_align are the offset and heading
   // tolerances, and both get widened at run time when the measured sensor
-  // noise calls for it. rear_target is the wanted gap to the rear wall,
-  // rear_margin covers sensor latency and overshoot, and rear_release is the
-  // gap that re-arms the brake. dwell is how many consecutive ticks a
+  // noise calls for it. rear_target is the wanted gap to the rear wall and
+  // rear_margin covers sensor latency and overshoot. dwell is how many
+  // consecutive ticks a
   // transition has to hold, max_strokes is the correction budget, stroke_dir
   // is +1 to run strokes forward out of the bay, brake_settle is the wait
   // after braking, and stroke_timeout is a hard limit on one stroke. ---
@@ -57,7 +118,6 @@ struct Config {
   float tol_align    = 0.061f;
   float rear_target  = 0.050f;
   float rear_margin  = 0.012f;
-  float rear_release = 0.090f;
   int   dwell        = 3;
   int   max_strokes  = 12;
   float stroke_dir   = 1.0f;
@@ -82,10 +142,7 @@ struct Config {
   // fine_threshold is the offset below which the fine amplitude is used.
   // psi_cap_min and psi_cap_max bound the peak-yaw cap, psi_meas_max is the
   // cone-safe limit on the excursion, servo_deadband is half the SG90
-  // deadband and servo_rate is the slew rate in radians per second.
-  // accel_model is the drive acceleration used for the time limits, and
-  // tol_align_deg is the heading tolerance in degrees, which has to stay clear
-  // of the estimate noise. ---
+  // deadband and servo_rate is the slew rate in radians per second. ---
   float delta_max     = 0.436f;
   float delta_coarse  = 0.436f;
   float delta_fine    = 0.209f;
@@ -95,8 +152,6 @@ struct Config {
   float psi_meas_max  = 0.209f;
   float servo_deadband = 0.026f;
   float servo_rate    = 5.236f;
-  float accel_model   = 0.60f;
-  float tol_align_deg = 3.5f;
   // end
 
   // Inner loop. omega_n is the closed-loop natural frequency in radians per
@@ -104,17 +159,34 @@ struct Config {
   // offset, which only trims out a steady bias, and i_max clamps that
   // integral. tau_psi and tau_x are the low-pass time constants on the heading
   // and offset estimates, tau_filt is the filter on the state used for the
-  // tolerance decisions, and rotate_margin says how far past the tolerance a
-  // rotate stroke is allowed to go. dt is the control period, which is the
-  // sensor rate. ---
+  // tolerance decisions, and dt is the control period, which is the sensor
+  // rate. ---
   float omega_n = 1.2f;
   float zeta    = 0.9f;
   float ki      = 0.0f;
   float i_max   = 0.20f;
   float tau_psi = 0.05f;
   float tau_filt = 0.25f;
-  float rotate_margin = 1.0f;
   float tau_x   = 0.03f;
   float dt      = 0.033f;
   // end
 };
+
+// The speed the car does with the driver that is fitted, as a fraction of
+// the speed it does with the DRV8833 it was measured with. A DC motor's
+// speed follows the voltage across it, and the driver takes its drop off the
+// supply, so the LM298 gives the motor less of the pack than the DRV8833
+// does. The speed in the config is what the car does with the DRV8833. ---
+inline float driveScale(const Config& c) {
+  const float fitted = c.motor_supply - driveModel(c.motor_driver).drop;
+  const float ref = c.motor_supply - driveModel(MotorDriver::DRV8833).drop;
+  if (fitted <= 0.0f || ref <= 0.0f) return 0.0f;
+  return fitted / ref;
+}
+// end
+
+// The speed the car does, with the driver that is fitted taken into account.
+inline float driveSpeed(const Config& c) {
+  return c.speed * driveScale(c);
+}
+// end

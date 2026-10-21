@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "ackermann.h"
 #include "config.h"
 #include "control.h"
 #include "geometry.h"
@@ -52,6 +53,7 @@ struct Telemetry {
   bool rearFault = false;
   bool travelFault = false;
   bool calibrated = false;
+  bool outOfSpec = false;
 };
 
 struct Supervisor {
@@ -73,7 +75,6 @@ struct Supervisor {
   float strokeT0 = 0;
   float strokeLegT0 = 0;
   float strokeDur = 0;
-  float strokeHalf = 0;
   float strokeDelta = 0;
   float strokeExcursion = 0;
   float strokeTargetPsi = 0;
@@ -98,7 +99,6 @@ struct Supervisor {
 
   // Dwell counters. A tolerance has to hold for `dwell` ticks before the
   // supervisor acts on it, so the car does not chatter across the band. ---
-  int dwellOk = 0;
   int dwellBad = 0;
   int inTolTicks = 0;
   // end
@@ -177,7 +177,7 @@ struct Supervisor {
     sub = 0;
     stroke = Stroke::NONE;
     strokeCount = 0;
-    dwellOk = dwellBad = 0;
+    dwellBad = 0;
     peakYaw = 0.0f;
     travel = 0.0f;
     rearFaultTicks = 0;
@@ -305,6 +305,7 @@ struct Supervisor {
     tel.peakYaw = peakYaw;
     tel.strokes = strokeCount;
     tel.travel = travel;
+    if (p.ok && fabsf(p.psi) > peakYaw) peakYaw = fabsf(p.psi);
     tel.valid = p.ok;
     tel.calibrated = calibrated();
 
@@ -319,7 +320,7 @@ struct Supervisor {
         break;
 
       case Phase::CORRECT:
-        stepCorrect(now, p, fp, psiCap, tolOff, tolAlign);
+        stepCorrect(now, dt, p, fp, gRear, psiCap, tolOff, tolAlign);
         break;
 
       case Phase::DONE:
@@ -339,10 +340,10 @@ struct Supervisor {
                   float gRear, float psiCap, float tolOff, float tolAlign) {
     // Reverse, with the inner loop on the servo. ---
     hal->setMotor(-1);
-    travel += cfg.speed * dt;
+    travel += driveSpeed(cfg) * dt;
 
     if (p.ok) {
-      const float delta = ctl.step(p.x, p.psi, -cfg.speed, dt, psiCap);
+      const float delta = ctl.step(p.x, p.psi, -driveSpeed(cfg), dt, psiCap);
       servoDeg = 90.0f + delta * 57.29578f;
       hal->setServo(servoDeg);
     }
@@ -360,6 +361,18 @@ struct Supervisor {
         phase = Phase::DONE;
         stroke = Stroke::NONE;
         hal->setMotor(0);
+        // The rear limit is a hard stop and it ends the manoeuvre wherever
+        // the car happens to be. Say whether that was inside the
+        // tolerance, because the log is the only record of it.
+        //
+        // The raw estimate is the one to judge it by. The filtered copy lags
+        // the car by the distance it covers in a filter time constant, which
+        // is about 37 mm at the nominal speed, so it says the car is further
+        // left or right than it is. The configured tolerances are the ones to
+        // judge against, not the widened ones the noise asked for. ---
+        tel.outOfSpec = (fabsf(p.x) > cfg.tol_off) ||
+                        (fabsf(p.psi) > cfg.tol_align);
+        // end
         return;
       }
     } else if (rearSeenValid && rearSeen - (travel - travelAtSeen) > trigger) {
@@ -397,10 +410,8 @@ struct Supervisor {
       const bool bad = fabsf(fp.x) > tolOff || fabsf(fp.psi) > tolAlign;
       if (bad) {
         dwellBad++;
-        dwellOk = 0;
       } else {
         dwellBad = 0;
-        dwellOk++;
       }
       if (dwellBad >= cfg.dwell) {
         phase = Phase::CORRECT;
@@ -408,7 +419,6 @@ struct Supervisor {
         stroke = Stroke::NONE;
         hal->setMotor(0);
         dwellBad = 0;
-        dwellOk = 0;
         ctl.reset();
       }
     }
@@ -419,8 +429,9 @@ struct Supervisor {
   // Run one correction. Sub-state 0 evaluates and picks the next
   // correction, heading before offset. Sub-state 1 runs the stroke. Sub-state
   // 2 settles the car before the next evaluation.
-  void stepCorrect(float now, const geom::Pose& p, const geom::Pose& fp,
-                   float psiCap, float tolOff, float tolAlign) {
+  void stepCorrect(float now, float dt, const geom::Pose& p,
+                   const geom::Pose& fp, float gRear, float psiCap,
+                   float tolOff, float tolAlign) {
     switch (sub) {
       case 0: {
         if (!p.ok) {
@@ -441,7 +452,6 @@ struct Supervisor {
             stroke = Stroke::NONE;
             inTolTicks = 0;
             dwellBad = 0;
-            dwellOk = 0;
             ctl.reset();
           }
           return;
@@ -493,10 +503,24 @@ struct Supervisor {
 
         servoDeg = 90.0f + cmd * 57.29578f;
         hal->setServo(servoDeg);
-        hal->setMotor(cfg.stroke_dir > 0 ? 1 : -1);
+        const int strokeDir = (cfg.stroke_dir > 0) ? 1 : -1;
+        hal->setMotor(strokeDir);
 
         bool done = (t >= strokeDur);
         bool abort = false;
+
+        // A stroke that drives towards the wall is watched the same way the
+        // reverse is: the travel counts and the rear limit ends it. The
+        // strokes normally run forward, out of the bay, so this only bites
+        // if the config points them the other way, and then it is the
+        // difference between a stop and a wall. ---
+        bool rearHit = false;
+        if (strokeDir < 0) {
+          travel += driveSpeed(cfg) * dt;
+          const float trigger = cfg.rear_target + cfg.d_stop + cfg.rear_margin;
+          if (geom::validRange(gRear) && gRear <= trigger) rearHit = true;
+        }
+        // end
 
         // A stroke that has lost the side readings has to stop. The car may
         // be against a wall, and holding the lock is the one thing that makes
@@ -530,9 +554,23 @@ struct Supervisor {
               // end
             } else {
               // Second leg: steer back until the heading is where it
-              // started. The band is zero width on purpose, because the
-              // estimate is noisier than any band worth having. ---
-              if (strokeExcSign * excursion <= 0.0f) done = true;
+              // started, and a little before that, because the servo needs
+              // the time to come back to centre and the car keeps yawing
+              // while it does. The peak of the stroke compensates for the
+              // same slew; the end of the return leg did not, and it left a
+              // heading of a degree or more behind.
+              //
+              // The compensation is 0.7 of what the slew model says. The
+              // model treats the yaw as if it carried on at the full-lock
+              // rate for the whole slew, and it does not: the rate falls to
+              // zero as the servo crosses the centre and the car is braking.
+              // Measured at the cut, the yaw that is left is about 0.4 of
+              // what the model predicts, and the grid prefers 0.7 of it. The
+              // band is zero width on purpose, because the estimate is
+              // noisier than any band worth having. ---
+              if (strokeExcSign * excursion <=
+                  0.7f * slewOvershoot(fabsf(strokeDelta)))
+                done = true;
               // end
             }
           }
@@ -546,7 +584,7 @@ struct Supervisor {
         if (fabsf(fp.psi) > psiCap + 0.087f) abort = true;
         // end
 
-        if (abort || t > cfg.stroke_timeout) done = true;
+        if (abort || rearHit || t > cfg.stroke_timeout) done = true;
 
         if (done) {
           hal->setMotor(0);
@@ -574,7 +612,17 @@ struct Supervisor {
                    now - strokeT0, strokeGain);
           }
           stroke = Stroke::NONE;
-          sub = 2;
+          if (rearHit) {
+            // The rear limit while correcting ends the manoeuvre, the same
+            // way it does while reversing. ---
+            phase = Phase::DONE;
+            sub = 0;
+            tel.outOfSpec = (fabsf(p.x) > cfg.tol_off) ||
+                            (fabsf(p.psi) > cfg.tol_align);
+            // end
+          } else {
+            sub = 2;
+          }
         }
         break;
       }
@@ -615,6 +663,26 @@ struct Supervisor {
   // absorbed by a gain the supervisor learns from the measured result of each
   // stroke.
 
+  // The largest equivalent angle the steering can deliver. With Ackermann
+  // steering that is what the inner wheel can reach, which is less than the
+  // wheel's own stop. ---
+  float steerLimit() {
+    if (cfg.steer_model == SteerModel::ACKERMANN) return ack::deltaEqMax(cfg);
+    return cfg.delta_max;
+  }
+  // end
+
+  // The stroke amplitude for an offset, limited by what the steering can
+  // deliver. ---
+  float strokeAmp(float offset) {
+    float a = (fabsf(offset) <= cfg.fine_threshold) ? cfg.delta_fine
+                                                    : cfg.delta_coarse;
+    const float lim = steerLimit();
+    if (a > lim) a = lim;
+    return a;
+  }
+  // end
+
   // The steer angle the wheels actually reach for a given command.
   float effAmp(float amp) {
     float a = amp - cfg.servo_deadband;
@@ -640,8 +708,9 @@ struct Supervisor {
   // Rough time for a heading excursion, used only as a safety limit.
   float excursionTime(float dpsi, float amp) {
     const float tanD = tanf(effAmp(amp));
-    if (tanD < 1e-6f || cfg.speed < 1e-3f) return cfg.stroke_timeout;
-    return fabsf(dpsi) * cfg.L_wb / (cfg.speed * tanD);
+    const float v = driveSpeed(cfg);
+    if (tanD < 1e-6f || v < 1e-3f) return cfg.stroke_timeout;
+    return fabsf(dpsi) * cfg.L_wb / (v * tanD);
   }
 
   // How far past the trigger the peak excursion lands, because the servo
@@ -667,8 +736,7 @@ struct Supervisor {
     if (want < -limit) want = -limit;
     // end
 
-    const float amp = (fabsf(p.psi) <= cfg.fine_threshold) ? cfg.delta_fine
-                                                            : cfg.delta_coarse;
+    const float amp = strokeAmp(p.psi);
 
     // The heading change follows the sign of the steering angle and the
     // direction of travel: sign(dpsi) = -sign(cmd) * dir. ---
@@ -689,7 +757,6 @@ struct Supervisor {
     strokeExcSign = (want >= 0.0f) ? 1.0f : -1.0f;
     strokeLeg = 0;
     strokeT0 = now;
-    strokeHalf = strokeDur * 0.5f;
     sub = 1;
     if (trace) {
       printf("    ROTATE  want dpsi=%.2fdeg amp=%.1fdeg limit=%.2fs "
@@ -700,8 +767,7 @@ struct Supervisor {
   }
 
   void beginTranslate(const geom::Pose& p, float psiCap, float now) {
-    const float amp = (fabsf(p.x) <= cfg.fine_threshold) ? cfg.delta_fine
-                                                          : cfg.delta_coarse;
+    const float amp = strokeAmp(p.x);
     const float dir = (cfg.stroke_dir > 0) ? 1.0f : -1.0f;
 
     // The first leg always swings the heading in the direction that moves the
@@ -713,12 +779,14 @@ struct Supervisor {
     const float excSign = -sgnFirst * dir;
     // end
 
-    // The tangent carries the sign of the first leg, because the shift the
-    // stroke makes goes the other way: a lock to the left moves the car to
-    // the right. The sign of the tangent is what decides which way the car
-    // goes. An unsigned one plans every stroke in the same direction, and the
-    // strokes planned for the far side of the centreline move the car further
-    // away from it instead of back towards it. ---
+    // The tangent carries the sign of the first leg, because the shift a
+    // stroke makes is 2(L/tan delta)(cos psi_peak - cos psi_start), and the
+    // bracket is negative for any excursion that grows. The sign of the
+    // tangent is therefore what decides which way the car goes, and a lock to
+    // the left shifts it to the left. An unsigned tangent plans every stroke
+    // the same way, and the strokes planned for the far side of the
+    // centreline move the car further away from it instead of back towards
+    // it. ---
     const float tanD = sgnFirst * tanf(effAmp(amp));
     // end
 
@@ -733,8 +801,11 @@ struct Supervisor {
     // end
 
     // The peak is capped, which caps the shift. The cap also keeps the
-    // absolute heading inside the cone-safe window, so the measurement stays
-    // valid for the whole stroke. ---
+    // absolute heading inside the cone-safe window, so the measurement
+    // stays good enough for the whole stroke: past the edge of the cone the
+    // reading bends by 1/cos, and the worst that bend does to the heading
+    // estimate over the whole grid is a tenth of a degree, which is a
+    // seventh of the noise the tolerances already absorb. ---
     float cap = psiCap;
     if (cap > cfg.psi_meas_max) cap = cfg.psi_meas_max;
     // end
@@ -794,7 +865,6 @@ struct Supervisor {
 
     strokeDur = excursionTime(target, amp) * 2.0f * 1.8f;
     if (strokeDur > cfg.stroke_timeout) strokeDur = cfg.stroke_timeout;
-    strokeHalf = strokeDur * 0.5f;
 
     stroke = Stroke::TRANSLATE;
     invalidTicks = 0;
