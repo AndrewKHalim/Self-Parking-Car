@@ -113,7 +113,6 @@ two thirds of the speed.
 |---|---|
 | `PLAN.md` | The full design: hardware, control system, geometry, simulation plan, open items |
 | `AUDIT.md` | The control logic audit of 2026-10-21, the findings, and what was done about each of them |
-| `HANDOFF.md` | The per-turn work log. Read this first when picking the work up |
 | `INFO.md` | Operational notes: verified commands, pin map, pitfalls, current status |
 | `OVERVIEW.md` | A shareable version of the design for a teammate |
 | `REVIEW-BRIEF.md` | The brief that went out for external review of the control architecture |

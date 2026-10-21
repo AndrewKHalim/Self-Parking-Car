@@ -7,3 +7,8 @@ build/
 *.o
 *.pyc
 __pycache__/
+
+# Internal working notes for the people building this. They stay in the
+# working tree and out of the published branch.
+AGENTS.md
+HANDOFF.md
