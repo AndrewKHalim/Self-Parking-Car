@@ -9,6 +9,14 @@ build/
 __pycache__/
 
 # Internal working notes for the people building this. They stay in the
-# working tree and out of the published branch.
+# working tree and out of the published branch, which carries the code and
+# the README.
 AGENTS.md
 HANDOFF.md
+PLAN.md
+INFO.md
+AUDIT.md
+OVERVIEW.md
+REVIEW.md
+REVIEW-BRIEF.md
+lib/Network/README.md
