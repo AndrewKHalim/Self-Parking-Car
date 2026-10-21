@@ -31,7 +31,7 @@ COLUMNS = [
     "x0", "psi0", "W", "D", "v", "noise", "seed", "finalX", "finalPsi",
     "finalRear", "minClear", "minRear", "peakPsi", "travel", "reverse",
     "strokes", "centred", "aligned", "rearOk", "hitWall", "gaveUp", "timedOut",
-    "rearFault", "travelFault",
+    "rearFault", "travelFault", "outOfSpec",
 ]
 
 
@@ -77,7 +77,8 @@ def summarise(rows, label):
     for key in ("centred", "aligned", "rearOk"):
         bad = sum(1 for r in rows if r[key] != "1")
         print(f"   not {key}: {bad}")
-    for key in ("hitWall", "gaveUp", "timedOut", "rearFault", "travelFault"):
+    for key in ("hitWall", "gaveUp", "timedOut", "rearFault", "travelFault",
+                "outOfSpec"):
         bad = sum(1 for r in rows if r.get(key) == "1")
         print(f"   {key}: {bad}")
 
@@ -115,6 +116,21 @@ def main():
                                     "v": v, "noise": noise, "seed": seed,
                                 })
 
+    # The calibration is taken from one parked pose, and nothing in the code
+    # can tell whether the car was square. These groups are what a squaring
+    # error costs, because the requirement has to live somewhere. ---
+    cal_jobs = {}
+    for calPsi in (1.0, 2.0, 3.0):
+        cal_jobs[calPsi] = []
+        for x0 in (0.02, 0.04, 0.06, -0.02, -0.04, -0.06):
+            for psi0 in (0, 5, -5):
+                for seed in range(1, args.seeds + 1):
+                    cal_jobs[calPsi].append({
+                        "x": x0, "psi": psi0, "W": 0.50, "D": 0.60, "v": 0.15,
+                        "noise": 0.003, "seed": seed, "cal-psi": calPsi,
+                    })
+    # end
+
     # The clearance interlock cannot bind in a parking scenario, because a bay
     # narrow enough to bind it is narrower than the car, and in such a bay the
     # side sensors lose the wall before the cap matters. This group is here to
@@ -132,21 +148,28 @@ def main():
                     })
     # end
 
-    print(f"running {len(jobs) + len(narrow)} scenarios")
+    ncal = sum(len(v) for v in cal_jobs.values())
+    print(f"running {len(jobs) + len(narrow) + ncal} scenarios")
     rows = run_batch(jobs)
     narrow_rows = run_batch(narrow)
+    cal_rows = {}
+    for calPsi, jb in cal_jobs.items():
+        cal_rows[calPsi] = run_batch(jb)
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     with open(args.out, "w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=COLUMNS)
         writer.writeheader()
-        for row in rows + narrow_rows:
+        for row in rows + narrow_rows + [r for v in cal_rows.values() for r in v]:
             writer.writerow({k: row.get(k, "") for k in COLUMNS})
     print(f"wrote {args.out}")
 
     summarise(rows, "overall")
     print()
     summarise(narrow_rows, "narrow bay (clearance interlock)")
+    print()
+    for value in sorted(cal_rows, key=float):
+        summarise(cal_rows[value], f"calibration squaring error = {value} deg")
 
     # Break the results down by the variable that the plan is unsure about.
     for key, label in (("x0", "start offset"), ("psi0", "start heading"),

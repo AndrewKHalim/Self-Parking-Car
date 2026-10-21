@@ -108,9 +108,9 @@ struct Config {
 
   // Supervisor limits. tol_off and tol_align are the offset and heading
   // tolerances, and both get widened at run time when the measured sensor
-  // noise calls for it. rear_target is the wanted gap to the rear wall,
-  // rear_margin covers sensor latency and overshoot, and rear_release is the
-  // gap that re-arms the brake. dwell is how many consecutive ticks a
+  // noise calls for it. rear_target is the wanted gap to the rear wall and
+  // rear_margin covers sensor latency and overshoot. dwell is how many
+  // consecutive ticks a
   // transition has to hold, max_strokes is the correction budget, stroke_dir
   // is +1 to run strokes forward out of the bay, brake_settle is the wait
   // after braking, and stroke_timeout is a hard limit on one stroke. ---
@@ -118,7 +118,6 @@ struct Config {
   float tol_align    = 0.061f;
   float rear_target  = 0.050f;
   float rear_margin  = 0.012f;
-  float rear_release = 0.090f;
   int   dwell        = 3;
   int   max_strokes  = 12;
   float stroke_dir   = 1.0f;
@@ -143,10 +142,7 @@ struct Config {
   // fine_threshold is the offset below which the fine amplitude is used.
   // psi_cap_min and psi_cap_max bound the peak-yaw cap, psi_meas_max is the
   // cone-safe limit on the excursion, servo_deadband is half the SG90
-  // deadband and servo_rate is the slew rate in radians per second.
-  // accel_model is the drive acceleration used for the time limits, and
-  // tol_align_deg is the heading tolerance in degrees, which has to stay clear
-  // of the estimate noise. ---
+  // deadband and servo_rate is the slew rate in radians per second. ---
   float delta_max     = 0.436f;
   float delta_coarse  = 0.436f;
   float delta_fine    = 0.209f;
@@ -156,8 +152,6 @@ struct Config {
   float psi_meas_max  = 0.209f;
   float servo_deadband = 0.026f;
   float servo_rate    = 5.236f;
-  float accel_model   = 0.60f;
-  float tol_align_deg = 3.5f;
   // end
 
   // Inner loop. omega_n is the closed-loop natural frequency in radians per
@@ -165,28 +159,34 @@ struct Config {
   // offset, which only trims out a steady bias, and i_max clamps that
   // integral. tau_psi and tau_x are the low-pass time constants on the heading
   // and offset estimates, tau_filt is the filter on the state used for the
-  // tolerance decisions, and rotate_margin says how far past the tolerance a
-  // rotate stroke is allowed to go. dt is the control period, which is the
-  // sensor rate. ---
+  // tolerance decisions, and dt is the control period, which is the sensor
+  // rate. ---
   float omega_n = 1.2f;
   float zeta    = 0.9f;
   float ki      = 0.0f;
   float i_max   = 0.20f;
   float tau_psi = 0.05f;
   float tau_filt = 0.25f;
-  float rotate_margin = 1.0f;
   float tau_x   = 0.03f;
   float dt      = 0.033f;
   // end
 };
 
-// The fraction of the motor's speed the car gets, with the driver's drop
-// taken off the supply. It is what a bench measurement has to beat: the
-// speed in the config is what the car does with the driver that is fitted,
-// so this is the tool for working out what a different driver would do. ---
+// The speed the car does with the driver that is fitted, as a fraction of
+// the speed it does with the DRV8833 it was measured with. A DC motor's
+// speed follows the voltage across it, and the driver takes its drop off the
+// supply, so the LM298 gives the motor less of the pack than the DRV8833
+// does. The speed in the config is what the car does with the DRV8833. ---
 inline float driveScale(const Config& c) {
-  const float v = c.motor_supply - driveModel(c.motor_driver).drop;
-  if (c.motor_supply <= 0.0f || v <= 0.0f) return 0.0f;
-  return v / c.motor_supply;
+  const float fitted = c.motor_supply - driveModel(c.motor_driver).drop;
+  const float ref = c.motor_supply - driveModel(MotorDriver::DRV8833).drop;
+  if (fitted <= 0.0f || ref <= 0.0f) return 0.0f;
+  return fitted / ref;
+}
+// end
+
+// The speed the car does, with the driver that is fitted taken into account.
+inline float driveSpeed(const Config& c) {
+  return c.speed * driveScale(c);
 }
 // end

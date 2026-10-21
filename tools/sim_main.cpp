@@ -113,7 +113,8 @@ struct Sim : Hal {
 
     // The drive is on or off with a ramp, and the brake decelerates to a stop
     // and stays there. ---
-    float target = (motorDir > 0) ? cfg.speed : (motorDir < 0 ? -cfg.speed : 0.0f);
+    const float vMax = driveSpeed(cfg);
+    float target = (motorDir > 0) ? vMax : (motorDir < 0 ? -vMax : 0.0f);
     if (motorDir == 0) {
       float d = brakeDecel * dt;
       if (fabsf(v) <= d) v = 0.0f;
@@ -223,6 +224,7 @@ struct Result {
   bool hitWall = false;
   bool rearFault = false;
   bool travelFault = false;
+  bool outOfSpec = false;
   float finalX = 0, finalPsi = 0, finalRear = 0;
   float minClear = 0, minRear = 0, peakPsi = 0, travel = 0, reverse = 0;
   int strokes = 0;
@@ -233,7 +235,8 @@ struct Result {
 static Result runScenario(const Config& base, float x0, float psi0, float W,
                           float D, float v, float noise, unsigned seed,
                           float tmax = 40.0f, bool trace = false,
-                          float faultRearAt = -1.0f, float faultSideAt = -1.0f) {
+                          float faultRearAt = -1.0f, float faultSideAt = -1.0f,
+                          float calX = 0.0f, float calPsi = 0.0f) {
   Config cfg = base;
   cfg.speed = v;
 
@@ -255,8 +258,8 @@ static Result runScenario(const Config& base, float x0, float psi0, float W,
   // Calibration step: the car is parked centred and squared up, and the
   // controller averages a batch of readings for S0 and the zero-offset trim.
   // One reading per tick, so the supervisor is run until it has them. ---
-  sim.x = 0.0f;
-  sim.psi = 0.0f;
+  sim.x = calX;
+  sim.psi = calPsi;
   sim.y = 0.5f * D;
   sup.calibrate();
   int calibTicks = 0;
@@ -348,6 +351,7 @@ static Result runScenario(const Config& base, float x0, float psi0, float W,
   r.hitWall = sim.hitWall;
   r.rearFault = sup.tel.rearFault;
   r.travelFault = sup.tel.travelFault;
+  r.outOfSpec = sup.tel.outOfSpec;
   r.travel = sim.travel;
   r.reverse = sup.tel.travel;
 
@@ -368,6 +372,7 @@ int main(int argc, char** argv) {
   bool csv = false;
   bool trace = false;
   float faultRearAt = -1.0f, faultSideAt = -1.0f;
+  float calX = 0.0f, calPsi = 0.0f;
   std::string steer = "parallel", driver = "drv8833";
 
   for (int i = 1; i < argc; i++) {
@@ -390,6 +395,8 @@ int main(int argc, char** argv) {
     else if (a == "--steer") steer = argv[++i];
     else if (a == "--driver") driver = argv[++i];
     else if (a == "--fault-rear-at") faultRearAt = next();
+    else if (a == "--cal-x") calX = next();
+    else if (a == "--cal-psi") calPsi = next() * kDeg;
     else if (a == "--fault-side-at") faultSideAt = next();
   }
 
@@ -397,18 +404,18 @@ int main(int argc, char** argv) {
   if (driver == "lm298") cfg.motor_driver = MotorDriver::LM298;
 
   Result r = runScenario(cfg, x0, psi0, W, D, v, noise, seed, 40.0f, trace,
-                         faultRearAt, faultSideAt);
+                         faultRearAt, faultSideAt, calX, calPsi);
 
   if (csv) {
     printf("x0,psi0,W,D,v,noise,seed,finalX,finalPsi,finalRear,minClear,"
            "minRear,peakPsi,travel,reverse,strokes,centred,aligned,rearOk,"
-           "hitWall,gaveUp,timedOut,rearFault,travelFault\n");
+           "hitWall,gaveUp,timedOut,rearFault,travelFault,outOfSpec\n");
     printf("%.4f,%.3f,%.3f,%.3f,%.3f,%.4f,%u,%.4f,%.3f,%.4f,%.4f,%.4f,%.3f,"
-           "%.4f,%.4f,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+           "%.4f,%.4f,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
            x0, psi0 / kDeg, W, D, v, noise, seed, r.finalX, r.finalPsi / kDeg,
            r.finalRear, r.minClear, r.minRear, r.peakPsi / kDeg, r.travel,
            r.reverse, r.strokes, r.centred, r.aligned, r.rearOk, r.hitWall,
-           r.gaveUp, r.timedOut, r.rearFault, r.travelFault);
+           r.gaveUp, r.timedOut, r.rearFault, r.travelFault, r.outOfSpec);
   } else {
     printf("scenario: x0=%.1fcm psi0=%.1fdeg bay=%.0fx%.0fcm v=%.2f noise=%.1fmm "
            "steer=%s driver=%s\n",
@@ -421,9 +428,9 @@ int main(int argc, char** argv) {
            "travel %.2fm   reverse %.2fm\n",
            r.strokes, r.peakPsi / kDeg, r.minClear * 1000, r.travel, r.reverse);
     printf("  centred=%d aligned=%d rear_ok=%d hit_wall=%d gave_up=%d "
-           "timeout=%d rear_fault=%d travel_fault=%d\n",
+           "timeout=%d rear_fault=%d travel_fault=%d out_of_spec=%d\n",
            r.centred, r.aligned, r.rearOk, r.hitWall, r.gaveUp, r.timedOut,
-           r.rearFault, r.travelFault);
+           r.rearFault, r.travelFault, r.outOfSpec);
   }
   return 0;
 }

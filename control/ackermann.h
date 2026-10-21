@@ -23,13 +23,15 @@
 // Two relations carry the geometry, and they are easy to swap. With the inner
 // wheel angle d_in and the outer d_out:
 //
-//   Ackermann condition : cot(d_in) - cot(d_out) = t_front / L_wb    a difference
+//   Ackermann condition : cot(d_out) - cot(d_in) = t_front / L_wb    a difference
 //   turn radius         : R = L_wb * (cot(d_in) + cot(d_out)) / 2    a sum
 //
-// The difference is constant at every lock angle. Only the sum changes with
-// lock. Swapping them returns t_front/L_wb for every input, which reads like
-// a radius but never varies, and nothing else looks wrong. An earlier draft
-// of this design had exactly that bug.
+// The inner wheel has the smaller radius, so its cotangent is the smaller
+// one, and the condition has the outer one first. The difference is constant
+// at every lock angle. Only the sum changes with lock. Swapping them returns
+// t_front/L_wb for every input, which reads like a radius but never varies,
+// and nothing else looks wrong. An earlier draft of this design had exactly
+// that bug.
 //
 // All angles are signed, positive to the left, matching control.h.
 
