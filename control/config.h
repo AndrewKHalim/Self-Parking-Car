@@ -5,6 +5,46 @@
 // The bay is made by hand, so its width and depth are not in this file at all:
 // they are measured at run time from the sensors (see supervisor.h).
 
+// How the front wheels are steered. The chassis has not been measured, so
+// this is a switch and not a fact. The controller works in the equivalent
+// angle either way, because the bicycle model is exact for the turn radius
+// and both kinds of steering give the same radius. What the switch changes
+// is the limit: with Ackermann steering the inner wheel takes more lock than
+// the equivalent angle, so it reaches its own stop first and the equivalent
+// angle is held below what the wheel can do. ---
+enum class SteerModel {
+  PARALLEL,   // both front wheels at the same angle
+  ACKERMANN,  // the wheels follow the Ackermann relation
+};
+// end
+
+// The motor driver. The board was built for a DRV8833 and an LM298 is being
+// discussed. The truth table is the same for both, so the firmware does not
+// branch on it: one pin high and the other low drives, both high brakes fast,
+// both low brakes slowly. What differs is the voltage the driver drops, and
+// that is the speed the car does. ---
+enum class MotorDriver {
+  DRV8833,
+  LM298,
+};
+// end
+
+// What the driver does to the drive: the voltage it drops at the drive
+// current, and the deceleration it brakes at. The drops are the datasheet
+// figures at about one amp. The brake figures are placeholders, because
+// neither driver has been measured on this car, and the stopping distance
+// is what has to come off the bench. ---
+struct DriveModel {
+  float drop;        // V
+  float brakeDecel;  // m/s^2
+};
+
+inline DriveModel driveModel(MotorDriver d) {
+  if (d == MotorDriver::LM298) return DriveModel{2.5f, 0.6f};
+  return DriveModel{0.5f, 1.0f};
+}
+// end
+
 struct Config {
   // Chassis and mounts, all in metres. L_wb is the wheelbase, L_car the car
   // length and t_front the front track width. All three are placeholders.
@@ -30,6 +70,27 @@ struct Config {
   float e_R      = 0.00f;
   float e_out_L  = 0.010f;
   float e_out_R  = 0.010f;
+  // end
+
+  // The steering and the drive. Both are switches, because neither the
+  // chassis nor the driver has been measured, and the README is not
+  // evidence. ---
+  SteerModel steer_model = SteerModel::PARALLEL;
+  MotorDriver motor_driver = MotorDriver::DRV8833;
+  // end
+
+  // The supply the motor runs on, and how much of it the driver takes. A
+  // DC motor's speed follows the voltage across it, so the LM298 runs the
+  // car at about two thirds of the speed the DRV8833 does on the same pack.
+  // The supply is a placeholder until the pack is known. ---
+  float motor_supply = 7.4f;
+  // end
+
+  // How much the front wheels drag in a turn when they are not steered to
+  // the Ackermann relation. It is a rolling-resistance-like term, and on a
+  // car this size it is worth well under a percent of the speed, which is
+  // the point of measuring it rather than assuming it matters. ---
+  float scrub_gain = 0.05f;
   // end
 
   // Run-time calibration. S0 is the sensor sum with the car squared up, and
@@ -118,3 +179,14 @@ struct Config {
   float dt      = 0.033f;
   // end
 };
+
+// The fraction of the motor's speed the car gets, with the driver's drop
+// taken off the supply. It is what a bench measurement has to beat: the
+// speed in the config is what the car does with the driver that is fitted,
+// so this is the tool for working out what a different driver would do. ---
+inline float driveScale(const Config& c) {
+  const float v = c.motor_supply - driveModel(c.motor_driver).drop;
+  if (c.motor_supply <= 0.0f || v <= 0.0f) return 0.0f;
+  return v / c.motor_supply;
+}
+// end

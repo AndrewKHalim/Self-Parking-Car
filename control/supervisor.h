@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "ackermann.h"
 #include "config.h"
 #include "control.h"
 #include "geometry.h"
@@ -52,6 +53,7 @@ struct Telemetry {
   bool rearFault = false;
   bool travelFault = false;
   bool calibrated = false;
+  bool outOfSpec = false;
 };
 
 struct Supervisor {
@@ -360,6 +362,11 @@ struct Supervisor {
         phase = Phase::DONE;
         stroke = Stroke::NONE;
         hal->setMotor(0);
+        // The rear limit is a hard stop and it ends the manoeuvre wherever
+        // the car happens to be. Say whether that was inside the
+        // tolerance, because the log is the only record of it. ---
+        tel.outOfSpec = (fabsf(fp.x) > tolOff) || (fabsf(fp.psi) > tolAlign);
+        // end
         return;
       }
     } else if (rearSeenValid && rearSeen - (travel - travelAtSeen) > trigger) {
@@ -530,9 +537,15 @@ struct Supervisor {
               // end
             } else {
               // Second leg: steer back until the heading is where it
-              // started. The band is zero width on purpose, because the
-              // estimate is noisier than any band worth having. ---
-              if (strokeExcSign * excursion <= 0.0f) done = true;
+              // started, and a little before that, because the servo needs
+              // the time to come back to centre and the car keeps yawing
+              // while it does. The peak of the stroke compensates for the
+              // same slew; the end of the return leg did not, and it left a
+              // heading of a degree or more behind. The band is zero width
+              // on purpose, because the estimate is noisier than any band
+              // worth having. ---
+              if (strokeExcSign * excursion <= slewOvershoot(fabsf(strokeDelta)))
+                done = true;
               // end
             }
           }
@@ -615,6 +628,26 @@ struct Supervisor {
   // absorbed by a gain the supervisor learns from the measured result of each
   // stroke.
 
+  // The largest equivalent angle the steering can deliver. With Ackermann
+  // steering that is what the inner wheel can reach, which is less than the
+  // wheel's own stop. ---
+  float steerLimit() {
+    if (cfg.steer_model == SteerModel::ACKERMANN) return ack::deltaEqMax(cfg);
+    return cfg.delta_max;
+  }
+  // end
+
+  // The stroke amplitude for an offset, limited by what the steering can
+  // deliver. ---
+  float strokeAmp(float offset) {
+    float a = (fabsf(offset) <= cfg.fine_threshold) ? cfg.delta_fine
+                                                    : cfg.delta_coarse;
+    const float lim = steerLimit();
+    if (a > lim) a = lim;
+    return a;
+  }
+  // end
+
   // The steer angle the wheels actually reach for a given command.
   float effAmp(float amp) {
     float a = amp - cfg.servo_deadband;
@@ -667,8 +700,7 @@ struct Supervisor {
     if (want < -limit) want = -limit;
     // end
 
-    const float amp = (fabsf(p.psi) <= cfg.fine_threshold) ? cfg.delta_fine
-                                                            : cfg.delta_coarse;
+    const float amp = strokeAmp(p.psi);
 
     // The heading change follows the sign of the steering angle and the
     // direction of travel: sign(dpsi) = -sign(cmd) * dir. ---
@@ -700,8 +732,7 @@ struct Supervisor {
   }
 
   void beginTranslate(const geom::Pose& p, float psiCap, float now) {
-    const float amp = (fabsf(p.x) <= cfg.fine_threshold) ? cfg.delta_fine
-                                                          : cfg.delta_coarse;
+    const float amp = strokeAmp(p.x);
     const float dir = (cfg.stroke_dir > 0) ? 1.0f : -1.0f;
 
     // The first leg always swings the heading in the direction that moves the
@@ -733,8 +764,11 @@ struct Supervisor {
     // end
 
     // The peak is capped, which caps the shift. The cap also keeps the
-    // absolute heading inside the cone-safe window, so the measurement stays
-    // valid for the whole stroke. ---
+    // absolute heading inside the cone-safe window, so the measurement
+    // stays good enough for the whole stroke: past the edge of the cone the
+    // reading bends by 1/cos, and the worst that bend does to the heading
+    // estimate over the whole grid is a tenth of a degree, which is a
+    // seventh of the noise the tolerances already absorb. ---
     float cap = psiCap;
     if (cap > cfg.psi_meas_max) cap = cfg.psi_meas_max;
     // end
