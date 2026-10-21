@@ -62,7 +62,15 @@ struct Sim : Hal {
   float minClear = 1e9f;
   float minRear = 1e9f;
   float peakPsi = 0.0f;
+  float travel = 0.0f;
   bool hitWall = false;
+  // end
+
+  // Fault injection, so the watchdogs can be tested against a sensor that
+  // stops working. The time is when the fault starts, and a negative time
+  // means it never starts. ---
+  float faultRearAt = -1.0f;
+  float faultSideAt = -1.0f;
   // end
 
   // Model parameters. The deadband and the slew rate are the servo's, and the
@@ -123,6 +131,8 @@ struct Sim : Hal {
 
     float apsi = fabsf(psi);
     if (apsi > peakPsi) peakPsi = apsi;
+
+    travel += fabsf(v) * dt;
     // end
   }
 
@@ -165,6 +175,14 @@ struct Sim : Hal {
     gL = inRange(lt) ? lt + gauss(rng) * noise : 8.190f;
     gR = inRange(rt) ? rt + gauss(rng) * noise : 8.190f;
     gRear = inRange(rr) ? rr + gauss(rng) * noise : 8.190f;
+
+    if (faultSideAt >= 0.0f && t >= faultSideAt) {
+      gL = 8.190f;
+      gR = 8.190f;
+    }
+    if (faultRearAt >= 0.0f && t >= faultRearAt) {
+      gRear = 8.190f;
+    }
     // end
   }
 };
@@ -173,8 +191,10 @@ struct Result {
   bool timedOut = false;
   bool gaveUp = false;
   bool hitWall = false;
+  bool rearFault = false;
+  bool travelFault = false;
   float finalX = 0, finalPsi = 0, finalRear = 0;
-  float minClear = 0, minRear = 0, peakPsi = 0;
+  float minClear = 0, minRear = 0, peakPsi = 0, travel = 0, reverse = 0;
   int strokes = 0;
   int strokesUsed = 0;
   bool centred = false, aligned = false, rearOk = false;
@@ -182,7 +202,8 @@ struct Result {
 
 static Result runScenario(const Config& base, float x0, float psi0, float W,
                           float D, float v, float noise, unsigned seed,
-                          float tmax = 40.0f, bool trace = false) {
+                          float tmax = 40.0f, bool trace = false,
+                          float faultRearAt = -1.0f, float faultSideAt = -1.0f) {
   Config cfg = base;
   cfg.speed = v;
 
@@ -192,6 +213,8 @@ static Result runScenario(const Config& base, float x0, float psi0, float W,
   sim.D = D;
   sim.noise = noise;
   sim.rng.seed(seed);
+  sim.faultRearAt = faultRearAt;
+  sim.faultSideAt = faultSideAt;
 
   Supervisor sup;
   sup.cfg = cfg;
@@ -199,12 +222,26 @@ static Result runScenario(const Config& base, float x0, float psi0, float W,
   sup.trace = trace;
 
   // Calibration step: the car is parked centred and squared up, and the
-  // controller captures S0 and the zero-offset trim. ---
+  // controller averages a batch of readings for S0 and the zero-offset trim.
+  // One reading per tick, so the supervisor is run until it has them. ---
   sim.x = 0.0f;
   sim.psi = 0.0f;
   sim.y = 0.5f * D;
-  sim.updateSensors();
   sup.calibrate();
+  int calibTicks = 0;
+  while (!sup.calibrated() && calibTicks < 500) {
+    sim.updateSensors();
+    sup.update();
+    calibTicks++;
+  }
+  if (!sup.calibrated()) {
+    // The side readings never came up, so there is nothing to calibrate
+    // against and the run cannot start. ---
+    Result r;
+    r.timedOut = true;
+    return r;
+    // end
+  }
   // end
 
   // Then the car is placed at the test pose, offset and angled. ---
@@ -278,6 +315,10 @@ static Result runScenario(const Config& base, float x0, float psi0, float W,
   r.gaveUp = (sup.phase == Phase::GIVEUP);
   r.timedOut = (sup.phase != Phase::DONE && sup.phase != Phase::GIVEUP);
   r.hitWall = sim.hitWall;
+  r.rearFault = sup.tel.rearFault;
+  r.travelFault = sup.tel.travelFault;
+  r.travel = sim.travel;
+  r.reverse = sup.tel.travel;
 
   // The demo is judged on where the car actually ended up, not on what the
   // noisy estimate said at the last sample. ---
@@ -295,6 +336,7 @@ int main(int argc, char** argv) {
   unsigned seed = 1;
   bool csv = false;
   bool trace = false;
+  float faultRearAt = -1.0f, faultSideAt = -1.0f;
 
   for (int i = 1; i < argc; i++) {
     std::string a = argv[i];
@@ -313,29 +355,35 @@ int main(int argc, char** argv) {
     else if (a == "--omega") cfg.omega_n = next();
     else if (a == "--zeta") cfg.zeta = next();
     else if (a == "--d-stop") cfg.d_stop = next();
+    else if (a == "--fault-rear-at") faultRearAt = next();
+    else if (a == "--fault-side-at") faultSideAt = next();
   }
 
-  Result r = runScenario(cfg, x0, psi0, W, D, v, noise, seed, 40.0f, trace);
+  Result r = runScenario(cfg, x0, psi0, W, D, v, noise, seed, 40.0f, trace,
+                         faultRearAt, faultSideAt);
 
   if (csv) {
     printf("x0,psi0,W,D,v,noise,seed,finalX,finalPsi,finalRear,minClear,"
-           "minRear,peakPsi,strokes,centred,aligned,rearOk,hitWall,gaveUp,"
-           "timedOut\n");
-    printf("%.4f,%.3f,%.3f,%.3f,%.3f,%.4f,%u,%.4f,%.3f,%.4f,%.4f,%.4f,%.3f,%d,"
-           "%d,%d,%d,%d,%d,%d\n",
+           "minRear,peakPsi,travel,reverse,strokes,centred,aligned,rearOk,"
+           "hitWall,gaveUp,timedOut,rearFault,travelFault\n");
+    printf("%.4f,%.3f,%.3f,%.3f,%.3f,%.4f,%u,%.4f,%.3f,%.4f,%.4f,%.4f,%.3f,"
+           "%.4f,%.4f,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
            x0, psi0 / kDeg, W, D, v, noise, seed, r.finalX, r.finalPsi / kDeg,
-           r.finalRear, r.minClear, r.minRear, r.peakPsi / kDeg, r.strokes,
-           r.centred, r.aligned, r.rearOk, r.hitWall, r.gaveUp, r.timedOut);
+           r.finalRear, r.minClear, r.minRear, r.peakPsi / kDeg, r.travel,
+           r.reverse, r.strokes, r.centred, r.aligned, r.rearOk, r.hitWall,
+           r.gaveUp, r.timedOut, r.rearFault, r.travelFault);
   } else {
     printf("scenario: x0=%.1fcm psi0=%.1fdeg bay=%.0fx%.0fcm v=%.2f noise=%.1fmm\n",
            x0 * 100, psi0 / kDeg, W * 100, D * 100, v, noise * 1000);
     printf("  final   x=%.1fmm psi=%.2fdeg rear=%.0fmm\n", r.finalX * 1000,
            r.finalPsi / kDeg, r.finalRear * 1000);
-    printf("  strokes %d   peak yaw %.1fdeg   min clearance %.0fmm\n",
-           r.strokes, r.peakPsi / kDeg, r.minClear * 1000);
+    printf("  strokes %d   peak yaw %.1fdeg   min clearance %.0fmm   "
+           "travel %.2fm   reverse %.2fm\n",
+           r.strokes, r.peakPsi / kDeg, r.minClear * 1000, r.travel, r.reverse);
     printf("  centred=%d aligned=%d rear_ok=%d hit_wall=%d gave_up=%d "
-           "timeout=%d\n",
-           r.centred, r.aligned, r.rearOk, r.hitWall, r.gaveUp, r.timedOut);
+           "timeout=%d rear_fault=%d travel_fault=%d\n",
+           r.centred, r.aligned, r.rearOk, r.hitWall, r.gaveUp, r.timedOut,
+           r.rearFault, r.travelFault);
   }
   return 0;
 }

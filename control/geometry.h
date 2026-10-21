@@ -10,7 +10,7 @@
 // centreline, the side sensors read
 //
 //   gL = W/2 + x + d_L*sin(psi) - e_L*cos(psi)
-//   gR = W/2 - x - d_R*sin(psi) + e_R*cos(psi)
+//   gR = W/2 - x + d_R*sin(psi) - e_R*cos(psi)
 //
 // so the difference isolates the offset and the sum carries the heading:
 //
@@ -60,19 +60,24 @@ inline Pose pose(const Config& c, float gL, float gR) {
 // end
 
 // Body-to-wall clearance on the tighter side. The side sensors read to the
-// wall, so the body edge is that much closer in. ---
+// wall, so the body edge is that much closer in. A reading that is not usable
+// leaves the clearance unknown, and an unknown clearance comes back negative
+// so that the caller can hold the car back rather than let it swing. ---
 inline float clearance(const Config& c, float gL, float gR) {
-  float left = (validRange(gL) ? gL : 10.0f) - c.e_out_L;
-  float right = (validRange(gR) ? gR : 10.0f) - c.e_out_R;
+  if (!validRange(gL) || !validRange(gR)) return -1.0f;
+  float left = gL - c.e_out_L;
+  float right = gR - c.e_out_R;
   if (left < right) return left;
   return right;
 }
 // end
 
 // Peak yaw the body can swing before a corner touches a wall. The body sweeps
-// (L_car/2)*sin(psi) sideways, so the cap follows from the clearance. ---
+// (L_car/2)*sin(psi) sideways, so the cap follows from the clearance. A
+// clearance that is unknown or gone leaves the cap at the small end, because
+// the safe reading of "I cannot see the wall" is that there is no room. ---
 inline float peakYawCap(const Config& c, float clear) {
-  if (clear <= 0.0f) return 0.0f;
+  if (clear <= 0.0f) return c.psi_cap_min;
   float s = clear / (0.5f * c.L_car);
   if (s > 1.0f) s = 1.0f;
   float cap = asinf(s);

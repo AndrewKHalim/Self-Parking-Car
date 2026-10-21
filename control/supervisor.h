@@ -46,8 +46,12 @@ struct Telemetry {
   float psiCap = 0;
   float clearance = 0;
   float peakYaw = 0;
+  float travel = 0;
   int strokes = 0;
   bool valid = false;
+  bool rearFault = false;
+  bool travelFault = false;
+  bool calibrated = false;
 };
 
 struct Supervisor {
@@ -106,7 +110,33 @@ struct Supervisor {
   float noiseXAcc = 0.0f;
   float lastRawPsi = 0.0f;
   float lastRawX = 0.0f;
+  float prevRawPsi = 0.0f;
+  float prevRawX = 0.0f;
   bool  noisePrimed = false;
+  // end
+
+  // Calibration. The car is parked and squared up while the samples are
+  // taken, one per tick, and their averages become S0 and the trim. ---
+  int   calibCount = 0;
+  float calibSumS = 0.0f;
+  float calibSumT = 0.0f;
+  // end
+
+  // The watchdogs. rearFaultTicks counts the unusable rear readings in a row,
+  // travel is how far the car has reversed in the whole manoeuvre, and
+  // invalidTicks counts the unusable side readings during a stroke. ---
+  int   rearFaultTicks = 0;
+  float travel = 0.0f;
+  int   invalidTicks = 0;
+  // end
+
+  // The last usable rear reading, and the travel at the moment it was taken.
+  // The rear sensor has a finite range, so an unusable reading does not
+  // always mean a broken sensor: the wall can be out of range. How far the
+  // car has reversed since that reading says which of the two it is. ---
+  float rearSeen = 0.0f;
+  float travelAtSeen = 0.0f;
+  bool  rearSeenValid = false;
   // end
 
   float last = -1.0f;
@@ -121,27 +151,39 @@ struct Supervisor {
     ctl.reset();
   }
 
-  // Park the car centred and squared up, then call this once. S0 folds the
-  // bay width and both lateral mount offsets into one number, and the trim
-  // takes the left/right mount asymmetry out of the offset.
-  bool calibrate() {
-    if (hal == nullptr) return false;
-    float gL, gR, gRear;
-    hal->readSensors(gL, gR, gRear);
-    if (!geom::validRange(gL) || !geom::validRange(gR)) return false;
-    cfg.S0 = gL + gR;
-    cfg.trim = 0.5f * (gL - gR);
-    return true;
+  // Park the car centred and squared up, then call this once. The samples
+  // arrive one per tick and the supervisor keeps taking them until there are
+  // enough. S0 folds the bay width and both lateral mount offsets into one
+  // number, and the trim takes the left/right mount asymmetry out of the
+  // offset. Averaging matters here: one reading carries the whole sensor
+  // noise into the estimate, and the estimate keeps that bias for the rest of
+  // the run.
+  void calibrate() {
+    calibCount = 0;
+    calibSumS = 0.0f;
+    calibSumT = 0.0f;
+    cfg.S0 = 0.0f;
+    cfg.trim = 0.0f;
   }
 
-  void start() {
+  // Whether enough samples have been taken for the calibration to be good.
+  bool calibrated() const { return calibCount >= cfg.calib_samples; }
+
+  // Start reversing. The calibration has to be in place first, because S0 is
+  // what the heading estimate is measured against.
+  bool start() {
+    if (!calibrated()) return false;
     phase = Phase::BACK_IN;
     sub = 0;
     stroke = Stroke::NONE;
     strokeCount = 0;
     dwellOk = dwellBad = 0;
     peakYaw = 0.0f;
+    travel = 0.0f;
+    rearFaultTicks = 0;
+    tel.rearFault = false;
     ctl.reset();
+    return true;
   }
 
   void stop() {
@@ -166,7 +208,30 @@ struct Supervisor {
 
     float gL, gR, gRear;
     hal->readSensors(gL, gR, gRear);
-    const geom::Pose p = geom::pose(cfg, gL, gR);
+
+    // The calibration takes a few readings while the car stands parked and
+    // squared up, one per tick, and their averages are S0 and the trim. A
+    // single reading would put the whole sensor noise into the estimate, and
+    // the estimate keeps that bias for the rest of the run. ---
+    if (!calibrated() && geom::validRange(gL) && geom::validRange(gR)) {
+      calibSumS += gL + gR;
+      calibSumT += gL - gR;
+      calibCount++;
+      if (calibCount >= cfg.calib_samples) {
+        const float n = (float)calibCount;
+        cfg.S0 = calibSumS / n;
+        cfg.trim = 0.5f * calibSumT / n;
+      }
+    }
+    // end
+
+    // There is no pose until the calibration is in place. The heading is
+    // measured against S0, and without it the sum has no scale, so the
+    // heading it reads is a hundred degrees of nonsense and the filter would
+    // take a second and a half to forget it. ---
+    geom::Pose p;
+    if (calibrated()) p = geom::pose(cfg, gL, gR);
+    // end
 
     // The raw estimate carries a couple of degrees of heading noise, so the
     // tolerance decisions run on a filtered copy. The control law uses the raw
@@ -187,28 +252,36 @@ struct Supervisor {
 
     // The tolerances have to be wider than the noise the sensors actually
     // produce, and that is not known until the hardware runs. So it gets
-    // measured: the spread of the estimate between samples is noise while the
-    // car is tracking, and the tolerance follows it. ---
+    // measured. The second difference of the estimate is used rather than the
+    // first, because the first difference of a car that is turning is mostly
+    // yaw and would read as noise. The second difference of a smooth motion
+    // is small, so what is left in it is the sensor noise. ---
     if (p.ok && phase == Phase::BACK_IN) {
       if (noisePrimed) {
-        const float dPsi = p.psi - lastRawPsi;
-        const float dX = p.x - lastRawX;
+        const float d2Psi = p.psi - 2.0f * lastRawPsi + prevRawPsi;
+        const float d2X = p.x - 2.0f * lastRawX + prevRawX;
         const float a = 0.05f;
-        noisePsiAcc += a * (dPsi * dPsi - noisePsiAcc);
-        noiseXAcc += a * (dX * dX - noiseXAcc);
+        noisePsiAcc += a * (d2Psi * d2Psi - noisePsiAcc);
+        noiseXAcc += a * (d2X * d2X - noiseXAcc);
       }
+      prevRawPsi = lastRawPsi;
+      prevRawX = lastRawX;
       lastRawPsi = p.psi;
       lastRawX = p.x;
       noisePrimed = true;
     }
     // end
 
-    // The variance of a difference between two independent samples is twice
-    // the variance, and an exponential average of that gives the variance of
-    // the raw estimate. The filter then reduces it by a known factor. ---
-    const float reduce = sqrtf(cfg.tau_filt / (2.0f * cfg.dt));
-    const float sigmaPsi = sqrtf(fabsf(noisePsiAcc) * 0.5f) * reduce;
-    const float sigmaX = sqrtf(fabsf(noiseXAcc) * 0.5f) * reduce;
+    // The second difference of white noise has six times the variance of the
+    // noise itself, so the variance of the raw estimate is the measured
+    // spread divided by six. The filter on the estimate then takes the
+    // variance down by a/(2-a) for a first-order filter with coefficient a,
+    // and the tolerance decision runs on the filtered estimate, so that is
+    // the number the tolerance has to cover. ---
+    const float aFilt = 1.0f - expf(-cfg.dt / cfg.tau_filt);
+    const float reduce = sqrtf(aFilt / (2.0f - aFilt));
+    const float sigmaPsi = sqrtf(fabsf(noisePsiAcc) / 6.0f) * reduce;
+    const float sigmaX = sqrtf(fabsf(noiseXAcc) / 6.0f) * reduce;
     float tolAlign = cfg.tol_align;
     float tolOff = cfg.tol_off;
     if (sigmaPsi * 3.0f > tolAlign) tolAlign = sigmaPsi * 3.0f;
@@ -231,7 +304,9 @@ struct Supervisor {
     tel.clearance = clear;
     tel.peakYaw = peakYaw;
     tel.strokes = strokeCount;
+    tel.travel = travel;
     tel.valid = p.ok;
+    tel.calibrated = calibrated();
 
     switch (phase) {
       case Phase::IDLE:
@@ -264,6 +339,7 @@ struct Supervisor {
                   float gRear, float psiCap, float tolOff, float tolAlign) {
     // Reverse, with the inner loop on the servo. ---
     hal->setMotor(-1);
+    travel += cfg.speed * dt;
 
     if (p.ok) {
       const float delta = ctl.step(p.x, p.psi, -cfg.speed, dt, psiCap);
@@ -275,10 +351,41 @@ struct Supervisor {
     // Rear limit. The trigger sits in front of the wanted final gap by the
     // measured stopping distance plus the sensor latency margin. ---
     const float trigger = cfg.rear_target + cfg.d_stop + cfg.rear_margin;
-    if (geom::validRange(gRear) && gRear <= trigger) {
-      phase = Phase::DONE;
+    if (geom::validRange(gRear)) {
+      rearSeen = gRear;
+      travelAtSeen = travel;
+      rearSeenValid = true;
+      rearFaultTicks = 0;
+      if (gRear <= trigger) {
+        phase = Phase::DONE;
+        stroke = Stroke::NONE;
+        hal->setMotor(0);
+        return;
+      }
+    } else if (rearSeenValid && rearSeen - (travel - travelAtSeen) > trigger) {
+      // The wall is out of the sensor's range, which is not a fault. The car
+      // keeps reversing until the wall comes back into range. ---
+      rearFaultTicks = 0;
+    } else if (++rearFaultTicks >= cfg.rear_fault_ticks) {
+      // The wall should be in reach by now and the sensor cannot see it, so
+      // the car stops rather than reverse blind. ---
+      phase = Phase::GIVEUP;
       stroke = Stroke::NONE;
       hal->setMotor(0);
+      tel.rearFault = true;
+      return;
+    }
+    // end
+
+    // The travel watchdog. There is no odometer, so the distance is
+    // estimated from the commanded speed. It is the backstop for a rear
+    // reading that is usable but wrong, and it bounds the whole manoeuvre
+    // rather than one stretch of it. ---
+    if (travel > cfg.back_in_max_travel) {
+      phase = Phase::GIVEUP;
+      stroke = Stroke::NONE;
+      hal->setMotor(0);
+      tel.travelFault = true;
       return;
     }
     // end
@@ -300,6 +407,8 @@ struct Supervisor {
         sub = 0;
         stroke = Stroke::NONE;
         hal->setMotor(0);
+        dwellBad = 0;
+        dwellOk = 0;
         ctl.reset();
       }
     }
@@ -331,6 +440,8 @@ struct Supervisor {
             sub = 0;
             stroke = Stroke::NONE;
             inTolTicks = 0;
+            dwellBad = 0;
+            dwellOk = 0;
             ctl.reset();
           }
           return;
@@ -387,6 +498,16 @@ struct Supervisor {
         bool done = (t >= strokeDur);
         bool abort = false;
 
+        // A stroke that has lost the side readings has to stop. The car may
+        // be against a wall, and holding the lock is the one thing that makes
+        // that worse. ---
+        if (p.ok) {
+          invalidTicks = 0;
+        } else if (++invalidTicks >= cfg.stroke_invalid_ticks) {
+          abort = true;
+        }
+        // end
+
         if (p.ok) {
           const float excursion = p.psi - strokeStartPsi;
 
@@ -416,11 +537,14 @@ struct Supervisor {
             }
           }
 
-          // Clearance abort: never let the body swing past what the bay
-          // holds. ---
-          if (fabsf(p.psi) > psiCap + 0.087f) abort = true;
-          // end
         }
+
+        // Clearance abort: never let the body swing past what the bay holds.
+        // The filtered heading is used, because it is the last heading that
+        // was measured, and the interlock has to work when the measurement
+        // does not. ---
+        if (fabsf(fp.psi) > psiCap + 0.087f) abort = true;
+        // end
 
         if (abort || t > cfg.stroke_timeout) done = true;
 
@@ -556,6 +680,7 @@ struct Supervisor {
     if (strokeDur > cfg.stroke_timeout) strokeDur = cfg.stroke_timeout;
 
     stroke = Stroke::ROTATE;
+    invalidTicks = 0;
     strokeDelta = delta;
     strokeStartX = p.x;
     strokeStartPsi = p.psi;
@@ -577,7 +702,6 @@ struct Supervisor {
   void beginTranslate(const geom::Pose& p, float psiCap, float now) {
     const float amp = (fabsf(p.x) <= cfg.fine_threshold) ? cfg.delta_fine
                                                           : cfg.delta_coarse;
-    const float tanD = tanf(effAmp(amp));
     const float dir = (cfg.stroke_dir > 0) ? 1.0f : -1.0f;
 
     // The first leg always swings the heading in the direction that moves the
@@ -587,6 +711,15 @@ struct Supervisor {
     const float first = (p.x > 0.0f) ? amp : -amp;
     const float sgnFirst = (first > 0.0f) ? 1.0f : -1.0f;
     const float excSign = -sgnFirst * dir;
+    // end
+
+    // The tangent carries the sign of the first leg, because the shift the
+    // stroke makes goes the other way: a lock to the left moves the car to
+    // the right. The sign of the tangent is what decides which way the car
+    // goes. An unsigned one plans every stroke in the same direction, and the
+    // strokes planned for the far side of the centreline move the car further
+    // away from it instead of back towards it. ---
+    const float tanD = sgnFirst * tanf(effAmp(amp));
     // end
 
     // The shift of a symmetric S-curve that returns the heading to where it
@@ -606,15 +739,26 @@ struct Supervisor {
     if (cap > cfg.psi_meas_max) cap = cfg.psi_meas_max;
     // end
 
-    // The largest shift available: put the peak at the cap. It only ever
-    // shifts towards the centreline, so it is negative, and dxMax is the cap
-    // on how far the car may move in one stroke. ---
-    float dxMax = 2.0f * (cfg.L_wb / tanD) * (cosf(cap) - cs) * strokeGain;
-    if (dxMax > 0.0f) dxMax = 0.0f;
+    // How much room the swing has inside that window. Swinging away from the
+    // centreline runs out of window, swinging through it has the far side of
+    // the window to use. ---
+    const bool away = (excSign * p.psi >= 0.0f);
+    float room = away ? (cap - fabsf(p.psi)) : (cap + fabsf(p.psi));
+    if (room < 0.0f) room = 0.0f;
+    // end
 
-    float dx = -p.x;
-    if (dx < dxMax) dx = dxMax;
-    if (dx > 0.0f) dx = 0.0f;
+    // The largest shift available: put the peak at the cap. Its sign follows
+    // the sign of the tangent, so it points the same way as the shift the
+    // stroke is able to make. ---
+    float dxMax = 2.0f * (cfg.L_wb / tanD) * (cosf(cap) - cs) * strokeGain;
+    if (away && room <= 0.0f) dxMax = 0.0f;
+    // end
+
+    // The shift the stroke is asked for, which is towards the centreline,
+    // limited by what one stroke can do. ---
+    const float dxWant = -p.x;
+    float dx = dxWant;
+    if (fabsf(dx) > fabsf(dxMax)) dx = dxMax;
     // end
 
     // The peak that produces that shift. The gain is what previous strokes
@@ -653,6 +797,7 @@ struct Supervisor {
     strokeHalf = strokeDur * 0.5f;
 
     stroke = Stroke::TRANSLATE;
+    invalidTicks = 0;
     strokeDelta = first;
     strokeStartX = p.x;
     strokeStartPsi = p.psi;
