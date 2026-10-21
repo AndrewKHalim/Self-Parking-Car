@@ -34,9 +34,13 @@ struct Config {
 
   // Run-time calibration. S0 is the sensor sum with the car squared up, and
   // trim is the half difference of the two readings when the car is centred.
-  // speed and d_stop are measured on the bench and are still placeholders. ---
+  // calib_samples is how many readings are averaged to get them, because a
+  // single reading carries the whole sensor noise into the estimate for the
+  // rest of the run. speed and d_stop are measured on the bench and are still
+  // placeholders. ---
   float S0        = 0.0f;
   float trim      = 0.0f;
+  int   calib_samples = 32;
   float speed     = 0.15f;
   float d_stop    = 0.020f;
   // end
@@ -59,6 +63,18 @@ struct Config {
   float stroke_dir   = 1.0f;
   float brake_settle = 0.15f;
   float stroke_timeout = 3.0f;
+  // end
+
+  // The watchdogs. The rear sensor is the only thing between the car and the
+  // wall, so an unusable rear reading stops the car after rear_fault_ticks
+  // ticks instead of letting it reverse blind. back_in_max_travel is the
+  // furthest the car may reverse in the whole manoeuvre, estimated from the
+  // commanded speed because there is no odometer, and it is the backstop for
+  // a rear reading that is valid but wrong. stroke_invalid_ticks is how many
+  // consecutive unusable side readings end a stroke. ---
+  int   rear_fault_ticks = 3;
+  float back_in_max_travel = 2.5f;
+  int   stroke_invalid_ticks = 2;
   // end
 
   // Steering, all in radians unless noted. delta_max is the mechanical steer

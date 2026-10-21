@@ -88,6 +88,7 @@ and the whole vehicle state is already referenced to the rear axle centre.
 | File | What is in it |
 |---|---|
 | `PLAN.md` | The full design: hardware, control system, geometry, simulation plan, open items |
+| `AUDIT.md` | The control logic audit of 2026-10-21, the findings, and what was done about each of them |
 | `HANDOFF.md` | The per-turn work log. Read this first when picking the work up |
 | `INFO.md` | Operational notes: verified commands, pin map, pitfalls, current status |
 | `OVERVIEW.md` | A shareable version of the design for a teammate |
@@ -96,6 +97,7 @@ and the whole vehicle state is already referenced to the rear axle centre.
 | `control/` | The control core. No hardware calls, only the `Hal` interface |
 | `tools/sim_main.cpp` | The host plant, the sensor forward model, the scenarios |
 | `tools/sweep.py` | The parameter sweep, writes CSV and prints a summary |
+| `tools/geom_checks.cpp` | Direct checks of the sensor geometry, including the clearance interlock |
 
 The same `control/` code compiles against the real ESP32 HAL and against the
 host simulator, so the analysis can never drift from the firmware.
