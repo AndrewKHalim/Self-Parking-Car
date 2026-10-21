@@ -208,7 +208,6 @@ struct Supervisor {
 
     float gL, gR, gRear;
     hal->readSensors(gL, gR, gRear);
-    const geom::Pose p = geom::pose(cfg, gL, gR);
 
     // The calibration takes a few readings while the car stands parked and
     // squared up, one per tick, and their averages are S0 and the trim. A
@@ -224,6 +223,14 @@ struct Supervisor {
         cfg.trim = 0.5f * calibSumT / n;
       }
     }
+    // end
+
+    // There is no pose until the calibration is in place. The heading is
+    // measured against S0, and without it the sum has no scale, so the
+    // heading it reads is a hundred degrees of nonsense and the filter would
+    // take a second and a half to forget it. ---
+    geom::Pose p;
+    if (calibrated()) p = geom::pose(cfg, gL, gR);
     // end
 
     // The raw estimate carries a couple of degrees of heading noise, so the
