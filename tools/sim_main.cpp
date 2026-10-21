@@ -67,9 +67,8 @@ struct Sim : Hal {
   bool hitWall = false;
   // end
 
-  // Fault injection, so the watchdogs can be tested against a sensor that
-  // stops working. The time is when the fault starts, and a negative time
-  // means it never starts. ---
+  // Fault injection, so the watchdogs can be tested. The time is when the
+  // fault starts, and a negative time means it never starts. ---
   float faultRearAt = -1.0f;
   float faultSideAt = -1.0f;
   // end
@@ -127,15 +126,12 @@ struct Sim : Hal {
     // end
 
     // Kinematics at the rear axle. The car's forward axis points out of the
-    // bay, so reversing drives it in towards the rear wall. ---
+    // bay, so reversing drives it in towards the rear wall.
     //
-    // The turn comes from the front wheels. With Ackermann steering they
-    // follow the relation and the radius the two of them agree on is the
-    // radius the car turns at, which is the radius the bicycle model gives.
-    // With parallel steering both wheels are at the commanded angle and the
-    // radius is the same one, because a car with a fixed rear axle turns
-    // about a point on the rear axle line whatever the front wheels do. The
-    // two therefore differ in the scrub and not in the geometry. ---
+    // The turn comes from the front wheels, and both steering models give
+    // the same radius, because a car with a fixed rear axle turns about a
+    // point on the rear axle line whatever the front wheels do. They differ
+    // in the scrub, not in the geometry. ---
     float yaw;
     if (cfg.steer_model == SteerModel::ACKERMANN) {
       const float din = ack::deltaIn(cfg, delta);

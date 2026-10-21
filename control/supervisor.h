@@ -225,10 +225,8 @@ struct Supervisor {
     }
     // end
 
-    // There is no pose until the calibration is in place. The heading is
-    // measured against S0, and without it the sum has no scale, so the
-    // heading it reads is a hundred degrees of nonsense and the filter would
-    // take a second and a half to forget it. ---
+    // There is no pose until the calibration is in place. Without S0 the
+    // sensor sum has no scale and the heading it reads is nonsense. ---
     geom::Pose p;
     if (calibrated()) p = geom::pose(cfg, gL, gR);
     // end
@@ -361,15 +359,10 @@ struct Supervisor {
         phase = Phase::DONE;
         stroke = Stroke::NONE;
         hal->setMotor(0);
-        // The rear limit is a hard stop and it ends the manoeuvre wherever
-        // the car happens to be. Say whether that was inside the
-        // tolerance, because the log is the only record of it.
-        //
-        // The raw estimate is the one to judge it by. The filtered copy lags
-        // the car by the distance it covers in a filter time constant, which
-        // is about 37 mm at the nominal speed, so it says the car is further
-        // left or right than it is. The configured tolerances are the ones to
-        // judge against, not the widened ones the noise asked for. ---
+        // The rear limit ends the manoeuvre wherever the car happens to be,
+        // so say whether that was inside the tolerance. The raw estimate is
+        // the one to judge it by: the filtered copy lags the car by the
+        // distance it covers in a filter time constant. ---
         tel.outOfSpec = (fabsf(p.x) > cfg.tol_off) ||
                         (fabsf(p.psi) > cfg.tol_align);
         // end
@@ -390,10 +383,9 @@ struct Supervisor {
     }
     // end
 
-    // The travel watchdog. There is no odometer, so the distance is
-    // estimated from the commanded speed. It is the backstop for a rear
-    // reading that is usable but wrong, and it bounds the whole manoeuvre
-    // rather than one stretch of it. ---
+    // The travel watchdog, the backstop for a rear reading that is usable
+    // but wrong. There is no odometer, so the distance comes from the
+    // commanded speed. ---
     if (travel > cfg.back_in_max_travel) {
       phase = Phase::GIVEUP;
       stroke = Stroke::NONE;
@@ -509,11 +501,9 @@ struct Supervisor {
         bool done = (t >= strokeDur);
         bool abort = false;
 
-        // A stroke that drives towards the wall is watched the same way the
-        // reverse is: the travel counts and the rear limit ends it. The
-        // strokes normally run forward, out of the bay, so this only bites
-        // if the config points them the other way, and then it is the
-        // difference between a stop and a wall. ---
+        // A stroke that drives towards the wall is watched the way the
+        // reverse is. The strokes normally run forward, so this only bites
+        // if the config points them the other way. ---
         bool rearHit = false;
         if (strokeDir < 0) {
           travel += driveSpeed(cfg) * dt;
@@ -522,9 +512,8 @@ struct Supervisor {
         }
         // end
 
-        // A stroke that has lost the side readings has to stop. The car may
-        // be against a wall, and holding the lock is the one thing that makes
-        // that worse. ---
+        // A stroke that has lost the side readings has to stop: the car may
+        // be against a wall, and holding the lock makes that worse. ---
         if (p.ok) {
           invalidTicks = 0;
         } else if (++invalidTicks >= cfg.stroke_invalid_ticks) {
@@ -556,18 +545,9 @@ struct Supervisor {
               // Second leg: steer back until the heading is where it
               // started, and a little before that, because the servo needs
               // the time to come back to centre and the car keeps yawing
-              // while it does. The peak of the stroke compensates for the
-              // same slew; the end of the return leg did not, and it left a
-              // heading of a degree or more behind.
-              //
-              // The compensation is 0.7 of what the slew model says. The
-              // model treats the yaw as if it carried on at the full-lock
-              // rate for the whole slew, and it does not: the rate falls to
-              // zero as the servo crosses the centre and the car is braking.
-              // Measured at the cut, the yaw that is left is about 0.4 of
-              // what the model predicts, and the grid prefers 0.7 of it. The
-              // band is zero width on purpose, because the estimate is
-              // noisier than any band worth having. ---
+              // while it does. The compensation is 0.7 of what the slew model
+              // says, because the model overestimates the yaw that is left
+              // by about 2.4 times. ---
               if (strokeExcSign * excursion <=
                   0.7f * slewOvershoot(fabsf(strokeDelta)))
                 done = true;
