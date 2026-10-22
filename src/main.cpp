@@ -23,8 +23,7 @@ Adafruit_VL53L0X lox_back;
 Servo steeringServo;
 
 // Trigonometric Constants (45 degrees)
-const float SENSOR_ANGLE_RAD = 45.0 * (M_PI / 180.0);
-const float SIN_45 = sin(SENSOR_ANGLE_RAD); // ~0.7071
+constexpr float SIN_45 = 0.70710678f; // sin(45 deg)
 
 // Servo Configuration
 const int SERVO_CENTER = 90;     // Straight steering angle
@@ -120,11 +119,9 @@ void loop() {
     float rawLeftCm  = readSensorDistanceCM(lox_left);
     float rawRightCm = readSensorDistanceCM(lox_right);
 
-    // 2. Trigonometric Decomposition to Lateral Distances (cm)
+    // 2. Compute Lateral Distances and Steering Error (cm)
     float lateralLeft  = rawLeftCm * SIN_45;
     float lateralRight = rawRightCm * SIN_45;
-
-    // 3. Compute Steering Error
     float error = lateralLeft - lateralRight;
 
     // 4. Deadband Implementation
