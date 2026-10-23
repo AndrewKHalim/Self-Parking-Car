@@ -138,9 +138,9 @@ struct Sim : Hal {
       const float dout = ack::deltaOut(cfg, delta);
       const float ci = 1.0f / tanf(din);
       const float co = 1.0f / tanf(dout);
-      yaw = -v * 2.0f / (cfg.L_wb * (ci + co));
+      yaw = -v * 2.0f / (car::L_wb * (ci + co));
     } else {
-      yaw = -v * tanf(delta) / cfg.L_wb;
+      yaw = -v * tanf(delta) / car::L_wb;
     }
     psi += yaw * dt;
     x += v * sinf(psi) * dt;
@@ -149,8 +149,8 @@ struct Sim : Hal {
     // Parallel steering drags the front wheels sideways in every turn, and
     // Ackermann steering does not. ---
     if (cfg.steer_model == SteerModel::PARALLEL) {
-      const float slip = fabsf(v) * fabsf(tanf(delta)) * cfg.t_front
-                       / (2.0f * cfg.L_wb);
+      const float slip = fabsf(v) * fabsf(tanf(delta)) * car::t_front
+                       / (2.0f * car::L_wb);
       const float sgn = (v > 0.0f) ? 1.0f : ((v < 0.0f) ? -1.0f : 0.0f);
       v -= sgn * cfg.scrub_gain * slip * dt;
     }
@@ -167,8 +167,8 @@ struct Sim : Hal {
   void trueGaps(float& left, float& right, float& rear) const {
     const float uX = sinf(psi);
     const float lX = -cosf(psi);
-    const float lxp = x + cfg.d_L * uX + cfg.e_L * lX;
-    const float rxp = x - cfg.d_R * uX - cfg.e_R * lX;
+    const float lxp = x + car::d_L * uX + cfg.e_L * lX;
+    const float rxp = x - car::d_R * uX - cfg.e_R * lX;
     left = lxp + 0.5f * W;
     right = 0.5f * W - rxp;
     rear = y - rearBumper * cosf(psi);
@@ -190,7 +190,7 @@ struct Sim : Hal {
     // end
 
     // The body clearance is what the walls actually see. ---
-    const float clear = fminf(lt - cfg.e_out_L, rt - cfg.e_out_R);
+    const float clear = fminf(lt - car::e_out_L, rt - car::e_out_R);
     if (clear < minClear) minClear = clear;
     if (rr < minRear) minRear = rr;
     if (clear <= 0.0f || rr <= 0.0f) hitWall = true;

@@ -78,7 +78,7 @@ struct Control {
     const float sgn = (vSigned >= 0.0f) ? 1.0f : -1.0f;
 
     // Gains from (omega_n, zeta) and the current speed. ---
-    const float kg = 2.0f * c->zeta * c->omega_n * c->L_wb / v;   // inner gain
+    const float kg = 2.0f * c->zeta * c->omega_n * car::L_wb / v;   // inner gain
     const float kx = c->omega_n / (2.0f * c->zeta * v);            // outer gain
     // end
 

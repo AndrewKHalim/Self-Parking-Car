@@ -44,8 +44,8 @@ int main() {
         unknown < 0.0f, "negative means unknown");
 
   const float known = geom::clearance(cfg, 0.25f, 0.18f);
-  check("clearance is the tighter side", known > 0.169f && known < 0.171f,
-        "the 10 mm sensor offset comes off");
+  check("clearance is the tighter side", known > 0.121f && known < 0.124f,
+        "the 58 mm body offset comes off");
   // end
 
   // The cap has to fall to the small end when the clearance is unknown, and
@@ -54,12 +54,12 @@ int main() {
   check("the yaw cap fails closed", capUnknown == cfg.psi_cap_min,
         "the small end of the range");
 
-  const float capTight = geom::peakYawCap(cfg, 0.020f);
+  const float capTight = geom::peakYawCap(cfg, 0.040f);
   check("the yaw cap binds on a tight clearance",
-        capTight < cfg.psi_meas_max && capTight >= cfg.psi_cap_min,
+        capTight < cfg.psi_meas_max && capTight > cfg.psi_cap_min,
         "below the cone-safe limit");
 
-  const float capRoomy = geom::peakYawCap(cfg, 0.200f);
+  const float capRoomy = geom::peakYawCap(cfg, 0.180f);
   check("the yaw cap opens up with room", capRoomy == cfg.psi_cap_max,
         "the clearance is not what binds in a normal bay");
   // end
@@ -71,8 +71,8 @@ int main() {
     for (float x = -0.05f; x <= 0.051f; x += 0.025f) {
       const float ux = sinf(psi);
       const float lx = -cosf(psi);
-      const float gL = 0.5f * 0.5f + x + cfg.d_L * ux + cfg.e_L * lx;
-      const float gR = 0.5f * 0.5f - (x - cfg.d_R * ux - cfg.e_R * lx);
+      const float gL = 0.5f * 0.5f + x + car::d_L * ux + cfg.e_L * lx;
+      const float gR = 0.5f * 0.5f - (x - car::d_R * ux - cfg.e_R * lx);
 
       Config c = cfg;
       // The calibration is taken with the car centred and squared up, so S0

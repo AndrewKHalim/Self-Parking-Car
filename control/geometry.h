@@ -41,15 +41,15 @@ struct Pose {
 inline Pose pose(const Config& c, float gL, float gR) {
   Pose p;
   if (!validRange(gL) || !validRange(gR)) return p;
-  if (c.d_L + c.d_R <= 0.0f) return p;
+  if (car::d_L + car::d_R <= 0.0f) return p;
 
-  const float dsum = c.d_L + c.d_R;
+  const float dsum = car::d_L + car::d_R;
   // S = S0 + (d_L + d_R)*sin(psi), so psi comes out of the sum this way round.
   const float psi = (gL + gR - c.S0) / dsum;
 
   // Undo the fore/aft asymmetry leak into the offset, then the calibrated trim.
   const float x = 0.5f * (gL - gR)
-                - 0.5f * (c.d_L - c.d_R) * sinf(psi)
+                - 0.5f * (car::d_L - car::d_R) * sinf(psi)
                 - c.trim;
 
   p.x = x;
@@ -63,10 +63,10 @@ inline Pose pose(const Config& c, float gL, float gR) {
 // wall, so the body edge is that much closer in. A reading that is not usable
 // leaves the clearance unknown, and an unknown clearance comes back negative
 // so that the caller can hold the car back rather than let it swing. ---
-inline float clearance(const Config& c, float gL, float gR) {
+inline float clearance(const Config& /*c*/, float gL, float gR) {
   if (!validRange(gL) || !validRange(gR)) return -1.0f;
-  float left = gL - c.e_out_L;
-  float right = gR - c.e_out_R;
+  float left = gL - car::e_out_L;
+  float right = gR - car::e_out_R;
   if (left < right) return left;
   return right;
 }
@@ -78,7 +78,7 @@ inline float clearance(const Config& c, float gL, float gR) {
 // the safe reading of "I cannot see the wall" is that there is no room. ---
 inline float peakYawCap(const Config& c, float clear) {
   if (clear <= 0.0f) return c.psi_cap_min;
-  float s = clear / (0.5f * c.L_car);
+  float s = clear / (0.5f * car::L_car);
   if (s > 1.0f) s = 1.0f;
   float cap = asinf(s);
   if (cap < c.psi_cap_min) cap = c.psi_cap_min;
