@@ -67,7 +67,7 @@ struct Esp32Hal : Hal {
     Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
 
     // the driver pins are driven low first, so the car cannot move while the
-    // rest of the hardware comes up.
+    // rest of the hardware comes up. ---
     pinMode(PIN_MOTOR_IN1, OUTPUT);
     pinMode(PIN_MOTOR_IN2, OUTPUT);
     digitalWrite(PIN_MOTOR_IN1, LOW);

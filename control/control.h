@@ -42,8 +42,9 @@ struct Control {
 
   // returns the commanded steer angle at the wheel in radians, positive to the
   // left. psiCap is the peak heading excursion the current bay clearance
-  // allows.
-  float step(float x, float psi, float vSigned, float dt, float psiCap) {
+  // allows. xRef is the lateral reference, and zero is the parking case.
+  float step(float x, float psi, float vSigned, float dt, float psiCap,
+             float xRef = 0.0f) {
     if (c == nullptr) return 0.0f;
 
     const float v = fabsf(vSigned);
@@ -83,7 +84,7 @@ struct Control {
 
     // outer loop: where should the car point to come back to the centreline?
     // ---
-    float psiRef = -sgn * (kx * lpfX + c->ki * integ);
+    float psiRef = -sgn * (kx * (lpfX - xRef) + c->ki * integ);
     // end
 
     // clamp the heading excursion to what the clearance allows. beyond this the
@@ -96,7 +97,7 @@ struct Control {
     // otherwise the integrator winds up against the clamp. ---
     const bool clipped = (psiRef >= psiCap || psiRef <= -psiCap);
     if (!clipped) {
-      integ += lpfX * dt;
+      integ += (lpfX - xRef) * dt;
       if (integ > c->i_max) integ = c->i_max;
       if (integ < -c->i_max) integ = -c->i_max;
     }

@@ -38,17 +38,22 @@ constexpr uint32_t CONTROL_PERIOD_MS = 33;
 
 // ten messages a second is enough for a phone to watch a manoeuvre that takes
 // seconds, and it keeps the socket work far below the tick rate. the queue
-// overwrite means a slower rate costs nothing but a skipped sample.
+// overwrite means a slower rate costs nothing but a skipped sample. ---
 constexpr uint32_t TELEMETRY_PERIOD_MS = 100;
+// end
 
 // how long the web task waits for the configured network before it gives up and
 // brings up its own access point. ---
 constexpr uint32_t WIFI_TIMEOUT_MS = 15000;
 // end
 
-// core 1 is where the arduino loop runs and nothing else of ours does. core 0
-// carries the wifi stack, so the web task belongs beside it rather than in the
-// control loop's way. ---
+// the core map. control is on core 1 with the arduino loop task. the web task
+// and async tcp are on core 0, beside the wifi and lwip tasks, which the
+// platform's sdkconfig already pins there: CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0
+// and CONFIG_LWIP_TCPIP_TASK_AFFINITY=0x0. async tcp is pinned by
+// CONFIG_ASYNC_TCP_RUNNING_CORE in platformio.ini, because the library would
+// otherwise let freertos choose and the http and websocket work could land on
+// the control core. ---
 constexpr BaseType_t CONTROL_CORE = 1;
 constexpr BaseType_t WEB_CORE = 0;
 // end
@@ -70,8 +75,9 @@ static QueueHandle_t telemetryQueue = nullptr;
 
 // the only word that crosses the other way. it is a request rather than a
 // command, because the control task still refuses it before the calibration
-// and ignores it while a run is in progress.
+// and ignores it while a run is in progress. ---
 static std::atomic<bool> startRequest{false};
+// end
 
 static AsyncWebServer server(80);
 static AsyncWebSocket socket("/ws");
@@ -127,7 +133,7 @@ static void publishTelemetry(const Telemetry& t) {
 // end
 
 // the control task owns the supervisor, and through it the hal: it is the only
-// task that writes the servo, the motor or the i2c bus after boot. ---
+// task that writes the servo, the motor or the i2c bus after boot.
 static void controlTask(void* arg) {
   Esp32Hal* h = static_cast<Esp32Hal*>(arg);
 
@@ -158,11 +164,10 @@ static void controlTask(void* arg) {
   }
   // end
 }
-// end
 
 // join the configured network, or fall back to an access point of our own. the
 // wait is bounded, and the fallback is the reason the page is reachable on a
-// bench where the configured network is not there. ---
+// bench where the configured network is not there.
 static void connectNetwork() {
   WiFi.setHostname(HOSTNAME);
   WiFi.mode(WIFI_STA);
@@ -185,13 +190,11 @@ static void connectNetwork() {
   WiFi.softAP(AP_SSID, AP_PASSWORD);
   Serial.printf("ap %s password %s, open http://%s/\n", AP_SSID, AP_PASSWORD,
                 WiFi.softAPIP().toString().c_str());
-  // end
 }
-// end
 
 // the web task brings the network and the server up and then publishes the
 // newest telemetry every hundred milliseconds. the async server and the socket
-// run their own task once started, so this one only feeds them. ---
+// run their own task once started, so this one only feeds them.
 static void webTask(void* arg) {
   (void)arg;
 
@@ -215,16 +218,17 @@ static void webTask(void* arg) {
   TickType_t last = xTaskGetTickCount();
   Telemetry t;
 
+  // one receive with no wait per period: if the control task has not published
+  // since the last look there is nothing new to send, and the page keeps what
+  // it has. the delay holds the send rate at ten a second whatever the tick
+  // costs. ---
   for (;;) {
-    // a receive with no wait: if the control task has not published since the
-    // last look, there is nothing new to send and the page keeps what it has.
     if (xQueueReceive(telemetryQueue, &t, 0) == pdTRUE) publishTelemetry(t);
     socket.cleanupClients();
     vTaskDelayUntil(&last, pdMS_TO_TICKS(TELEMETRY_PERIOD_MS));
   }
   // end
 }
-// end
 
 void setup() {
   Serial.begin(115200);
