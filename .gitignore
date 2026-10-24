@@ -1,6 +1,7 @@
 # Regenerable. Do not commit.
 .pio/
 .venv/
+.venv-plot/
 build/
 
 # Host tooling
