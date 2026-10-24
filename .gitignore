@@ -7,6 +7,8 @@ build/
 *.o
 *.pyc
 __pycache__/
+*.d
+compile_commands.json
 
 # Internal working notes for the people building this. They stay in the
 # working tree and out of the published branch, which carries the code and
