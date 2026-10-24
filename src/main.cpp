@@ -38,8 +38,9 @@ constexpr uint32_t CONTROL_PERIOD_MS = 33;
 
 // ten messages a second is enough for a phone to watch a manoeuvre that takes
 // seconds, and it keeps the socket work far below the tick rate. the queue
-// overwrite means a slower rate costs nothing but a skipped sample.
+// overwrite means a slower rate costs nothing but a skipped sample. ---
 constexpr uint32_t TELEMETRY_PERIOD_MS = 100;
+// end
 
 // how long the web task waits for the configured network before it gives up and
 // brings up its own access point. ---
@@ -74,8 +75,9 @@ static QueueHandle_t telemetryQueue = nullptr;
 
 // the only word that crosses the other way. it is a request rather than a
 // command, because the control task still refuses it before the calibration
-// and ignores it while a run is in progress.
+// and ignores it while a run is in progress. ---
 static std::atomic<bool> startRequest{false};
+// end
 
 static AsyncWebServer server(80);
 static AsyncWebSocket socket("/ws");
@@ -131,7 +133,7 @@ static void publishTelemetry(const Telemetry& t) {
 // end
 
 // the control task owns the supervisor, and through it the hal: it is the only
-// task that writes the servo, the motor or the i2c bus after boot. ---
+// task that writes the servo, the motor or the i2c bus after boot.
 static void controlTask(void* arg) {
   Esp32Hal* h = static_cast<Esp32Hal*>(arg);
 
@@ -162,11 +164,10 @@ static void controlTask(void* arg) {
   }
   // end
 }
-// end
 
 // join the configured network, or fall back to an access point of our own. the
 // wait is bounded, and the fallback is the reason the page is reachable on a
-// bench where the configured network is not there. ---
+// bench where the configured network is not there.
 static void connectNetwork() {
   WiFi.setHostname(HOSTNAME);
   WiFi.mode(WIFI_STA);
@@ -189,13 +190,11 @@ static void connectNetwork() {
   WiFi.softAP(AP_SSID, AP_PASSWORD);
   Serial.printf("ap %s password %s, open http://%s/\n", AP_SSID, AP_PASSWORD,
                 WiFi.softAPIP().toString().c_str());
-  // end
 }
-// end
 
 // the web task brings the network and the server up and then publishes the
 // newest telemetry every hundred milliseconds. the async server and the socket
-// run their own task once started, so this one only feeds them. ---
+// run their own task once started, so this one only feeds them.
 static void webTask(void* arg) {
   (void)arg;
 
@@ -219,16 +218,17 @@ static void webTask(void* arg) {
   TickType_t last = xTaskGetTickCount();
   Telemetry t;
 
+  // one receive with no wait per period: if the control task has not published
+  // since the last look there is nothing new to send, and the page keeps what
+  // it has. the delay holds the send rate at ten a second whatever the tick
+  // costs. ---
   for (;;) {
-    // a receive with no wait: if the control task has not published since the
-    // last look, there is nothing new to send and the page keeps what it has.
     if (xQueueReceive(telemetryQueue, &t, 0) == pdTRUE) publishTelemetry(t);
     socket.cleanupClients();
     vTaskDelayUntil(&last, pdMS_TO_TICKS(TELEMETRY_PERIOD_MS));
   }
   // end
 }
-// end
 
 void setup() {
   Serial.begin(115200);

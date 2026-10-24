@@ -1,23 +1,22 @@
-# step-response evidence
+# step response evidence
 
-The lateral position loop is driven with a 40 mm reference step while the car
-reverses at a constant speed. The controller is the real `Control::step` from
-`control/control.h`, and the plant is the same servo and rear-axle bicycle
-model the parking simulator uses. The data is logged once per 30 Hz control
+the lateral position loop is driven with a 40 mm reference step while the car
+reverses at a constant speed. the controller is the real `Control::step` from
+`control/control.h`, and the plant is the same servo and rear axle bicycle
+model the parking simulator uses. the data is logged once per 30 Hz control
 tick and the figures are generated from that CSV.
 
-## Why lateral position
+## why lateral position
 
-The controlled variable is the rear axle lateral offset `x`, the state the
-parking supervisor regulates. A heading step would exercise only the inner
-loop: it would show the derivative action, the servo dead band and the
-heading filter, but not the position integration the manoeuvre is judged on.
-The lateral step puts the outer loop, the inner loop and the plant in the
-loop, which is the better closed-loop evidence.
+the controlled variable is the rear axle lateral offset `x`, the state the
+parking supervisor regulates. a heading step would exercise only the inner
+loop: it would show the derivative action, the servo dead band and the heading
+filter, but not the position integration the manoeuvre is judged on. a lateral
+step puts the outer loop, the inner loop and the plant in the loop.
 
-## Reference hook
+## reference hook
 
-`Control::step` had no reference input. It now takes a defaulted argument:
+`Control::step` had no reference input. it now takes a defaulted argument:
 
 ```c++
 float step(float x, float psi, float vSigned, float dt, float psiCap,
@@ -28,10 +27,10 @@ float psiRef = -sgn * (kx * (lpfX - xRef) + c->ki * integ);
 integ += (lpfX - xRef) * dt;
 ```
 
-With `xRef = 0` every parking call site keeps its meaning and the parking
+with `xRef = 0` every parking call site keeps its meaning and the parking
 behaviour is unchanged.
 
-## Plant and loop
+## plant and loop
 
 `tools/step_rig.cpp` uses the servo and bicycle model from
 `tools/sim_main.cpp`:
@@ -45,24 +44,26 @@ behaviour is unchanged.
 - every servo and plant value comes from `Config` and `car`: dead band, slew
   rate, steer model, scrub gain, speed, gains and steering limit.
 
-## Assumptions
+## assumptions
 
-- Simulation only. Nothing here is a hardware measurement.
-- The servo values are the SG90 datasheet numbers already in `Config`:
+- simulation only. nothing here is a hardware measurement.
+- the servo values are the SG90 datasheet numbers already in `Config`:
   `servo_deadband = 0.0314 rad` (10 us through the 1 to 2 ms angle range) and
   `servo_rate = 10.472 rad/s` (0.10 s/60 degrees at 4.8 V).
-- Constant speed. The drive ramp is not modelled because `accel` is a
-  simulator field rather than a `Config` value; the car starts at
+- constant speed. the drive ramp is not modelled because `accel` is a
+  simulator field rather than a `Config` value, so the car starts at
   `driveSpeed(cfg)`.
-- No measurement noise by default. The seed is fixed at 1 and `--noise`
+- no measurement noise by default. the seed is fixed at 1 and `--noise`
   adds Gaussian noise on `x` for a repeatable noisy run.
-- The 40 mm step makes the steering command reach the 25 degree limit at the
+- the 40 mm step makes the steering command reach the 25 degree limit at the
   start, so the early rise is actuator limited.
-- The nominal 0.15 m/s case cannot hold the 2 percent band: with the 1.8
+- the nominal 0.15 m/s case cannot hold the 2 percent band: with the 1.8
   degree dead band the position dead zone is 2.35 mm, against a band of
-  0.80 mm. That limit cycle is the second figure, not a tuning result.
+  0.80 mm. the second figure shows that limit cycle.
+- the run starts at `x = 0`, the parking target, and steps away from it.
+- the integral gain is zero, so the loop leaves a steady-state error.
 
-## Results
+## results
 
 | metric | 0.08 m/s primary | 0.15 m/s nominal |
 |---|---|---|
@@ -74,15 +75,15 @@ behaviour is unchanged.
 | peak steering command | 24.98 deg | 24.98 deg |
 | peak heading | 12.68 deg | 7.97 deg |
 
-The primary run settles inside the 0.80 mm band with no overshoot. The
+the primary run settles inside the 0.80 mm band with no overshoot. the
 residual 0.65 mm comes from the servo dead band: the final heading trim is
 below the dead band, so the wheel stops a fraction short.
 
-The nominal run rises to about 38.5 mm by 4 s, dips, climbs to 42.1 mm
-around 16 s and turns back. The band is crossed repeatedly and the position
+the nominal run rises to about 38.5 mm by 4 s, dips, climbs to 42.1 mm
+around 16 s and turns back. the band is crossed repeatedly and the position
 sweeps roughly 37.7 to 42.1 mm.
 
-## Files
+## files
 
 ```
 docs/step_response.csv         primary time series, 0.08 m/s
@@ -102,7 +103,7 @@ parameters used for each run. `build/metrics.txt` and
 `build/metrics_015.txt` are written by the plot script with the printed
 metrics.
 
-## Reproduce
+## reproduce
 
 ```bash
 mkdir -p build docs
@@ -120,12 +121,12 @@ g++ -std=c++17 -O2 -Wall -Wextra -Icontrol -o build/step_rig tools/step_rig.cpp 
     --suffix _015 --note "nominal speed" --window 19
 ```
 
-The plot environment is throwaway and is not the repo venv:
+the plot environment is throwaway and is not the repo venv:
 
 ```bash
 python3 -m venv .venv-plot
 .venv-plot/bin/pip install -r tools/plot-requirements.txt
 ```
 
-The rig is deterministic: two runs of the same command produce
+the rig is deterministic: two runs of the same command produce a
 byte-identical CSV.
