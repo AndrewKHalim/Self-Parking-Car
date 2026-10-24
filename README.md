@@ -2,7 +2,8 @@
 
 a small RC car reverses into a perpendicular parking bay, lines itself up with
 the bay walls and stops before the rear obstacle. the steering is closed loop,
-and a web dashboard plots the step response.
+the step response is logged by a host rig, and a web dashboard shows the live
+state and a graph.
 
 the car uses VL53L0X time-of-flight sensors for autonomous reverse parking. the
 steering is described as Ackermann, and the control code runs either kind of
@@ -155,8 +156,9 @@ what the numbers assume:
 - no measurement noise. the seed is fixed at 1, and `--noise` adds Gaussian
   noise on `x` for a repeatable noisy run.
 - 30 Hz control, with the plant substepped at 1 ms.
-- the integral gain is zero (`ki = 0`), so the loop leaves a steady-state
-  error: 1.61 percent at 0.08 m/s and 0.79 percent at 0.15 m/s.
+- the integral gain is zero (`ki = 0`), so there is no integral action to trim
+  the offset the dead band leaves. the measured residual is 1.61 percent at
+  0.08 m/s and 0.79 percent at 0.15 m/s.
 - the run starts at `x = 0`, the parking target, and steps away from it.
 
 reproduce both runs and the plots:

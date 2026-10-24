@@ -61,7 +61,9 @@ behaviour is unchanged.
   degree dead band the position dead zone is 2.35 mm, against a band of
   0.80 mm. the second figure shows that limit cycle.
 - the run starts at `x = 0`, the parking target, and steps away from it.
-- the integral gain is zero, so the loop leaves a steady-state error.
+- the integral gain is zero, so there is no integral action to trim the offset
+  the dead band leaves. the measured residual is 1.61 percent at 0.08 m/s and
+  0.79 percent at 0.15 m/s.
 
 ## results
 
