@@ -48,9 +48,8 @@ inline float turnRadius(const Config& /*c*/, float deq) {
 // end
 
 // inner wheel angle in radians. the inner wheel is the one on the side the car
-// turns towards, and it always takes more lock than delta_eq. that extra is
-// about 1.2 times, which is 5 degrees more at delta_eq = 25 degrees with
-// L_wb = 0.18 and t_front = 0.15. ---
+// turns towards, and it always takes more lock than delta_eq: at the 25 degree
+// equivalent limit the inner wheel takes about 5 degrees more. ---
 inline float deltaIn(const Config& c, float deq) {
   const float R = turnRadius(c, deq);
   const float r = R - 0.5f * car::t_front;
@@ -96,10 +95,9 @@ inline float deltaEq(const Config& /*c*/, float din, float dout) {
 // equivalent angle, its stop sets the limit on delta_eq, and the result is well
 // under delta_max.
 //
-// this is not wired in yet. control.h still clamps to c.delta_max, which reads
-// as the equivalent angle and is about 5 degrees optimistic. see PLAN.md 6.6
-// and the open items. fixing it changes the control output clamp, so it is left
-// for review. ---
+// control.h clamps to this when the wheels are Ackermann steered, and to
+// delta_max for parallel steering, where both wheels share one angle and the
+// full lock is available. ---
 inline float deltaEqMax(const Config& c) {
   // the wheels reach the command less the deadband (PLAN.md 5.2). ---
   const float lim = c.delta_max - c.servo_deadband;
