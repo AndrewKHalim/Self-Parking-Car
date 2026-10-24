@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Parameter sweep for the reverse-parking controller.
+"""parameter sweep for the reverse-parking controller.
 
-Drives the host simulator across a grid of assumed conditions and writes a
-CSV. The point is to explore the envelope, not to certify anything: the plant
-is a guess until the car is measured.
+drives the host simulator across a grid of assumed conditions and writes a CSV.
+the point is to explore the envelope, not to certify anything: the plant is a
+guess until the car is measured.
 
     python3 tools/sweep.py --out build/sweep.csv
     python3 tools/sweep.py --quick
 
-The grid covers offsets on both sides of the centreline, headings either way,
+the grid covers offsets on both sides of the centreline, headings either way,
 three bay widths, three bay depths, three speeds and two noise levels, with
-three seeds each. A separate narrow-bay group is there to make the clearance
+three seeds each. a separate narrow-bay group is there to make the clearance
 interlock bind, which no parking scenario ever does.
 
-No plotting: this host has no matplotlib and no pip, so the summary is text.
+no plotting: this host has no matplotlib and no pip, so the summary is text.
 """
 
 import argparse
@@ -36,7 +36,7 @@ COLUMNS = [
 
 
 def run_batch(jobs):
-    """Run the simulator once per job and return the parsed rows."""
+    """run the simulator once per job and return the parsed rows."""
     rows = []
     for job in jobs:
         cmd = [SIM, "--csv"]
@@ -116,9 +116,9 @@ def main():
                                     "v": v, "noise": noise, "seed": seed,
                                 })
 
-    # The calibration is taken from one parked pose, and nothing in the code
-    # can tell whether the car was square. These groups are what a squaring
-    # error costs, because the requirement has to live somewhere. ---
+    # the calibration is taken from one parked pose, and nothing in the code can
+    # tell whether the car was square. these groups are what a squaring error
+    # costs, because the requirement has to live somewhere. ---
     cal_jobs = {}
     for calPsi in (1.0, 2.0, 3.0):
         cal_jobs[calPsi] = []
@@ -131,14 +131,14 @@ def main():
                     })
     # end
 
-    # The clearance interlock cannot bind in a parking scenario, because a bay
+    # the clearance interlock cannot bind in a parking scenario, because a bay
     # narrow enough to bind it is narrower than the car, and in such a bay the
-    # side sensors lose the wall before the cap matters. This group is here to
-    # show what the supervisor does at that boundary: it stops making
-    # corrections instead of swinging on a reading it cannot trust. The cap
-    # itself is checked in tools/geom_checks.cpp.
+    # side sensors lose the wall before the cap matters. this group shows what
+    # the supervisor does at that boundary: it stops making corrections instead
+    # of swinging on a reading it cannot trust. the cap itself is checked in
+    # tools/geom_checks.cpp.
     #
-    # The width has to follow the car: the body sits 58mm outboard of each
+    # the width has to follow the car: the body sits 58mm outboard of each
     # sensor axis, so the bay has to be wider than 116mm before the car fits at
     # all, and the cap only binds between about 157mm and 213mm. ---
     narrow = []
@@ -175,7 +175,7 @@ def main():
     for value in sorted(cal_rows, key=float):
         summarise(cal_rows[value], f"calibration squaring error = {value} deg")
 
-    # Break the results down by the variable that the plan is unsure about.
+    # break the results down by the variable that the plan is unsure about.
     for key, label in (("x0", "start offset"), ("psi0", "start heading"),
                        ("W", "bay width"), ("D", "bay depth"),
                        ("v", "speed"), ("noise", "noise")):

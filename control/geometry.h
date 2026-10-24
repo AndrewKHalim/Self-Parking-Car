@@ -4,9 +4,9 @@
 
 #include "config.h"
 
-// Sensor-to-state geometry. See PLAN.md section 4.
+// sensor-to-state geometry. see PLAN.md section 4.
 //
-// With the car yawed by psi and its rear axle offset by x from the bay
+// with the car yawed by psi and its rear axle offset by x from the bay
 // centreline, the side sensors read
 //
 //   gL = W/2 + x + d_L*sin(psi) - e_L*cos(psi)
@@ -18,16 +18,16 @@
 //   gL + gR = W  + (d_L + d_R)*sin(psi) - (e_L + e_R)*cos(psi)
 //
 // psi comes out of the sum against a calibrated S0 taken with the car squared
-// up, and x out of the difference against a calibrated trim. S0 absorbs the
-// bay width and both lateral mount offsets in one number. The trim absorbs the
+// up, and x out of the difference against a calibrated trim. S0 absorbs the bay
+// width and both lateral mount offsets in one number. the trim absorbs the
 // left/right mount asymmetry.
 
 namespace geom {
 
 constexpr float kPi = 3.14159265f;
 
-// The VL53L0X reports 8190 when it sees no target and 65535 on a timeout.
-// Those readings get rejected, never averaged into a result. ---
+// the VL53L0X reports 8190 when it sees no target and 65535 on a timeout.
+// those readings get rejected, never averaged into a result. ---
 inline bool validRange(float m) { return m > 0.0f && m < 8.0f; }
 // end
 
@@ -37,7 +37,7 @@ struct Pose {
   bool ok = false;
 };
 
-// Turn a pair of side readings into the state estimate. ---
+// turn a pair of side readings into the state estimate. ---
 inline Pose pose(const Config& c, float gL, float gR) {
   Pose p;
   if (!validRange(gL) || !validRange(gR)) return p;
@@ -47,7 +47,7 @@ inline Pose pose(const Config& c, float gL, float gR) {
   // S = S0 + (d_L + d_R)*sin(psi), so psi comes out of the sum this way round.
   const float psi = (gL + gR - c.S0) / dsum;
 
-  // Undo the fore/aft asymmetry leak into the offset, then the calibrated trim.
+  // undo the fore/aft asymmetry leak into the offset, then the calibrated trim.
   const float x = 0.5f * (gL - gR)
                 - 0.5f * (car::d_L - car::d_R) * sinf(psi)
                 - c.trim;
@@ -59,10 +59,10 @@ inline Pose pose(const Config& c, float gL, float gR) {
 }
 // end
 
-// Body-to-wall clearance on the tighter side. The side sensors read to the
-// wall, so the body edge is that much closer in. A reading that is not usable
-// leaves the clearance unknown, and an unknown clearance comes back negative
-// so that the caller can hold the car back rather than let it swing. ---
+// body-to-wall clearance on the tighter side. the side sensors read to the
+// wall, so the body edge is that much closer in. a reading that is not usable
+// leaves the clearance unknown, and an unknown clearance comes back negative so
+// the caller can hold the car back rather than let it swing. ---
 inline float clearance(const Config& /*c*/, float gL, float gR) {
   if (!validRange(gL) || !validRange(gR)) return -1.0f;
   float left = gL - car::e_out_L;
@@ -72,10 +72,10 @@ inline float clearance(const Config& /*c*/, float gL, float gR) {
 }
 // end
 
-// Peak yaw the body can swing before a corner touches a wall. The body sweeps
-// (L_car/2)*sin(psi) sideways, so the cap follows from the clearance. A
+// peak yaw the body can swing before a corner touches a wall. the body sweeps
+// (L_car/2)*sin(psi) sideways, so the cap follows from the clearance. a
 // clearance that is unknown or gone leaves the cap at the small end, because
-// the safe reading of "I cannot see the wall" is that there is no room. ---
+// the safe reading of "i cannot see the wall" is that there is no room. ---
 inline float peakYawCap(const Config& c, float clear) {
   if (clear <= 0.0f) return c.psi_cap_min;
   float s = clear / (0.5f * car::L_car);

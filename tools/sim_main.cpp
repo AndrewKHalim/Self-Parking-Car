@@ -1,13 +1,13 @@
-// Host-side simulator for the reverse-parking controller.
+// host-side simulator for the reverse-parking controller.
 //
-// The plant is a kinematic bicycle model referred to the rear axle. The sensor
+// the plant is a kinematic bicycle model referred to the rear axle. the sensor
 // forward model casts to the bay wall planes and then applies the same
 // conversion the firmware applies, including the 25 degree cone limit of the
 // VL53L0X, so the sweep shows where the heading estimate degrades.
 //
-// The controller code is the same code the firmware runs. The control/ folder
-// has no hardware calls, only the Hal interface, and that is the whole point
-// of the split (PLAN.md section 14).
+// the controller code is the same code the firmware runs. the control/ folder
+// has no hardware calls, only the Hal interface, and that is the whole point of
+// the split (PLAN.md section 14).
 //
 //   g++ -std=c++17 -O2 -Icontrol -o build/sim tools/sim_main.cpp -lm
 
@@ -27,20 +27,20 @@
 
 static const float kDeg = 3.14159265f / 180.0f;
 
-// Half the VL53L0X field of view. ---
+// half the VL53L0X field of view. ---
 static const float kConeHalf = 12.5f * kDeg;
 // end
 
 struct Sim : Hal {
   Config cfg;
 
-  // The bay, in metres. ---
+  // the bay, in metres. ---
   float W = 0.50f;
   float D = 0.60f;
   float rearBumper = 0.05f;
   // end
 
-  // Car state. x is the rear axle offset from the bay centreline, psi the
+  // car state. x is the rear axle offset from the bay centreline, psi the
   // heading, and y the rear axle distance from the rear wall. v is the speed
   // along the car's own forward axis and is signed, and delta is the steer
   // angle the wheels have actually reached. ---
@@ -53,13 +53,13 @@ struct Sim : Hal {
   int motorDir = 0;
   // end
 
-  // Sensor cache, refreshed at the ranging period. ---
+  // sensor cache, refreshed at the ranging period. ---
   float gL = 0.0f, gR = 0.0f, gRear = 0.0f;
   // end
 
   float t = 0.0f;
 
-  // Statistics collected over the run. ---
+  // statistics collected over the run. ---
   float minClear = 1e9f;
   float minRear = 1e9f;
   float peakPsi = 0.0f;
@@ -67,13 +67,13 @@ struct Sim : Hal {
   bool hitWall = false;
   // end
 
-  // Fault injection, so the watchdogs can be tested. The time is when the
-  // fault starts, and a negative time means it never starts. ---
+  // fault injection, so the watchdogs can be tested. the time is when the fault
+  // starts, and a negative time means it never starts. ---
   float faultRearAt = -1.0f;
   float faultSideAt = -1.0f;
   // end
 
-  // Model parameters. The deadband and the slew rate are the servo's, and the
+  // model parameters. the deadband and the slew rate are the servo's, and the
   // two accelerations describe the drive. ---
   float noise = 0.003f;
   float deadband = 1.5f * kDeg;
@@ -99,7 +99,7 @@ struct Sim : Hal {
 
   // ========================================================= plant ============
   void step(float dt) {
-    // The servo is rate limited and has a deadband. The wheels only move once
+    // the servo is rate limited and has a deadband. the wheels only move once
     // the command clears the deadband, and then they lag it by that much. ---
     float err = cmdDelta - delta;
     if (fabsf(err) > deadband) {
@@ -110,7 +110,7 @@ struct Sim : Hal {
     }
     // end
 
-    // The drive is on or off with a ramp, and the brake decelerates to a stop
+    // the drive is on or off with a ramp, and the brake decelerates to a stop
     // and stays there. ---
     const float vMax = driveSpeed(cfg);
     float target = (motorDir > 0) ? vMax : (motorDir < 0 ? -vMax : 0.0f);
@@ -125,13 +125,13 @@ struct Sim : Hal {
     }
     // end
 
-    // Kinematics at the rear axle. The car's forward axis points out of the
+    // kinematics at the rear axle. the car's forward axis points out of the
     // bay, so reversing drives it in towards the rear wall.
     //
-    // The turn comes from the front wheels, and both steering models give
-    // the same radius, because a car with a fixed rear axle turns about a
-    // point on the rear axle line whatever the front wheels do. They differ
-    // in the scrub, not in the geometry. ---
+    // the turn comes from the front wheels, and both steering models give the
+    // same radius, because a car with a fixed rear axle turns about a point on
+    // the rear axle line whatever the front wheels do. they differ in the
+    // scrub, not in the geometry. ---
     float yaw;
     if (cfg.steer_model == SteerModel::ACKERMANN) {
       const float din = ack::deltaIn(cfg, delta);
@@ -146,7 +146,7 @@ struct Sim : Hal {
     x += v * sinf(psi) * dt;
     y += v * cosf(psi) * dt;
 
-    // Parallel steering drags the front wheels sideways in every turn, and
+    // parallel steering drags the front wheels sideways in every turn, and
     // Ackermann steering does not. ---
     if (cfg.steer_model == SteerModel::PARALLEL) {
       const float slip = fabsf(v) * fabsf(tanf(delta)) * car::t_front
@@ -163,7 +163,7 @@ struct Sim : Hal {
     // end
   }
 
-  // True perpendicular gaps, with no cone factor and no noise. ---
+  // true perpendicular gaps, with no cone factor and no noise. ---
   void trueGaps(float& left, float& right, float& rear) const {
     const float uX = sinf(psi);
     const float lX = -cosf(psi);
@@ -175,12 +175,12 @@ struct Sim : Hal {
   }
   // end
 
-  // Sample the sensors, including the cone limit and the range failures.
+  // sample the sensors, including the cone limit and the range failures.
   void updateSensors() {
     float lt, rt, rr;
     trueGaps(lt, rt, rr);
 
-    // Past the half-cone the sensor starts to see along the wall, so the
+    // past the half-cone the sensor starts to see along the wall, so the
     // reading grows. ---
     float excess = fabsf(psi) - kConeHalf;
     if (excess < 0.0f) excess = 0.0f;
@@ -189,15 +189,15 @@ struct Sim : Hal {
     rt *= cone;
     // end
 
-    // The body clearance is what the walls actually see. ---
+    // the body clearance is what the walls actually see. ---
     const float clear = fminf(lt - car::e_out_L, rt - car::e_out_R);
     if (clear < minClear) minClear = clear;
     if (rr < minRear) minRear = rr;
     if (clear <= 0.0f || rr <= 0.0f) hitWall = true;
     // end
 
-    // Range limits: below the cover glass minimum or past the target range,
-    // the sensor reports no target at all. ---
+    // range limits: below the cover glass minimum or past the target range, the
+    // sensor reports no target at all. ---
     auto inRange = [](float d) { return d > 0.03f && d < 2.0f; };
     gL = inRange(lt) ? lt + gauss(rng) * noise : 8.190f;
     gR = inRange(rt) ? rt + gauss(rng) * noise : 8.190f;
@@ -251,9 +251,9 @@ static Result runScenario(const Config& base, float x0, float psi0, float W,
   sup.attach(&sim);
   sup.trace = trace;
 
-  // Calibration step: the car is parked centred and squared up, and the
+  // calibration step: the car is parked centred and squared up, and the
   // controller averages a batch of readings for S0 and the zero-offset trim.
-  // One reading per tick, so the supervisor is run until it has them. ---
+  // one reading per tick, so the supervisor is run until it has them. ---
   sim.x = calX;
   sim.psi = calPsi;
   sim.y = 0.5f * D;
@@ -265,8 +265,8 @@ static Result runScenario(const Config& base, float x0, float psi0, float W,
     calibTicks++;
   }
   if (!sup.calibrated()) {
-    // The side readings never came up, so there is nothing to calibrate
-    // against and the run cannot start. ---
+    // the side readings never came up, so there is nothing to calibrate against
+    // and the run cannot start. ---
     Result r;
     r.timedOut = true;
     return r;
@@ -274,7 +274,7 @@ static Result runScenario(const Config& base, float x0, float psi0, float W,
   }
   // end
 
-  // Then the car is placed at the test pose, offset and angled. ---
+  // then the car is placed at the test pose, offset and angled. ---
   sim.x = x0;
   sim.psi = psi0;
   sim.y = D - 0.08f;
@@ -284,8 +284,8 @@ static Result runScenario(const Config& base, float x0, float psi0, float W,
   sup.last = -1.0f;
   // end
 
-  // The plant runs far faster than the sensors, so the plant takes a small
-  // step and the controller runs at the ranging period. ---
+  // the plant runs far faster than the sensors, so the plant takes a small step
+  // and the controller runs at the ranging period. ---
   const float plantDt = 0.001f;
   const float sensorPeriod = 0.033f;
   float sensorT = 0.0f;
@@ -303,8 +303,8 @@ static Result runScenario(const Config& base, float x0, float psi0, float W,
       sim.updateSensors();
       sup.update();
 
-      // Print the truth next to the estimate whenever a stroke is running,
-      // so the estimate's error is visible. ---
+      // print the truth next to the estimate whenever a stroke is running, so
+      // the estimate's error is visible. ---
       if (trace && sup.stroke != Stroke::NONE) {
         float lt, rt, rr;
         sim.trueGaps(lt, rt, rr);
@@ -315,7 +315,7 @@ static Result runScenario(const Config& base, float x0, float psi0, float W,
       }
       // end
 
-      // Print again each time a stroke completes. ---
+      // print again each time a stroke completes. ---
       if (sup.strokeCount != lastStrokes) {
         lastStrokes = sup.strokeCount;
         if (trace) {
@@ -351,7 +351,7 @@ static Result runScenario(const Config& base, float x0, float psi0, float W,
   r.travel = sim.travel;
   r.reverse = sup.tel.travel;
 
-  // The demo is judged on where the car actually ended up, not on what the
+  // the demo is judged on where the car actually ended up, not on what the
   // noisy estimate said at the last sample. ---
   r.centred = fabsf(sim.x) <= cfg.tol_off;
   r.aligned = fabsf(sim.psi) <= cfg.tol_align;
