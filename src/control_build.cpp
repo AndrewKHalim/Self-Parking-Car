@@ -1,11 +1,11 @@
 // compile check for the control core.
 //
-// control/ is header only and the firmware never includes it, so on the target
-// nothing there reaches the compiler. this translation unit exists to change
-// that: it includes supervisor.h and calls the inline entry points once, which
-// is enough for the compiler to emit them. nothing here runs, and there is no
-// Hal implementation yet, so this proves the core compiles for the ESP32-S3,
-// not that the loop works.
+// the firmware includes the core through src/esp32_hal.h, so this is no longer
+// the only way it reaches the target compiler. it stays as a check that the
+// entry points compile and link with no hal attached and nothing running: the
+// geometry, the loop and the supervisor against a plain config. a signature
+// that changes under main.cpp's feet shows up here as a build error rather than
+// as a behaviour change on the car.
 
 #include "supervisor.h"
 

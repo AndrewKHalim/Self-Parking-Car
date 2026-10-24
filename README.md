@@ -82,7 +82,24 @@ PlatformIO will not link it. Leave it as it is: a symlink into
 `~/.platformio/packages/` resolves on the machine that made it and nowhere
 else.
 
-### 3. The host simulator
+### 3. The network and the dashboard
+
+The firmware joins the network named in `src/wifi_config.h`: put the SSID and
+the password there, or leave the placeholders and let it fall back. The join is
+bounded at 15 s, after which the car brings up its own access point:
+
+| | |
+|---|---|
+| SSID | `autoparking` |
+| password | `autoparking` |
+| page | `http://192.168.4.1/` |
+
+The page shows the live state and a chart of the last 300 samples, and the
+button asks the control task to start a run. It refuses before the calibration
+and ignores the request while a run is in progress. Telemetry goes to the page
+over a WebSocket at `/ws`, about ten messages a second.
+
+### 4. The host simulator
 
 No board needed. The control core has no hardware calls in it, so the same
 code runs on the host.
@@ -206,16 +223,21 @@ two thirds of the speed.
 | `tools/sim_main.cpp` | The host plant, the sensor forward model, the scenarios and the fault injection |
 | `tools/sweep.py` | The parameter sweep, writes a CSV and prints a summary |
 | `tools/geom_checks.cpp` | Direct checks of the sensor geometry, including the clearance interlock |
-| `src/main.cpp` | The firmware. A stack-verification sketch today, not the control firmware |
+| `src/main.cpp` | The firmware runtime: the control task on core 1, the web task on core 0, and the handoff between them |
+| `src/esp32_hal.h` | The ESP32 `Hal`: three VL53L0X on one bus, the servo and the DRV8833 |
+| `src/dashboard_html.h` | The dashboard, as one PROGMEM string |
+| `src/wifi_config.h` | The SSID, the password and the fallback access point, in one place |
+| `src/control_build.cpp` | Builds the control core with no hardware attached, as a compile check |
 | `lib/Network/` | The committed `Network` source, with the manifest that makes PlatformIO build it |
 
 The control core has no hardware calls in it, so the same code runs against
-the host simulator and against the ESP32 once the HAL adapter is written.
-Today only the simulator does.
+the host simulator and against the ESP32 through `src/esp32_hal.h`. Both are
+built: the simulator on the host, the firmware for the target.
 
 ## Status
 
-The firmware builds and links. The board has never been flashed, and no sensor
-reading has been verified on real hardware. The control core and the host
-simulator are written and the sweep runs; the firmware HAL adapter and the
-dashboard are not written yet.
+The firmware builds and links, at RAM 14.7% and Flash 30.6%. The board has
+never been flashed and no sensor reading, servo position or WiFi join has been
+verified on real hardware. The control core, the host simulator, the HAL
+adapter and the dashboard are all written; the manoeuvre itself remains
+unproven until the car runs.
