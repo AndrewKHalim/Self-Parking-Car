@@ -66,8 +66,9 @@ def summarise(rows, label):
     clearance = sorted(float(r["minClear"]) * 1000 for r in rows)
     peak = sorted(float(r["peakPsi"]) for r in rows)
     reverse = sorted(float(r["reverse"]) for r in rows)
-    print(f"{label}: {len(ok)}/{n} fully successful "
-          f"({100.0 * len(ok) / n:.0f}%)")
+    # truncated rather than rounded, so a shortfall never reads as a clean 100.
+    pct = (1000 * len(ok)) // n
+    print(f"{label}: {len(ok)}/{n} fully successful ({pct / 10:.1f}%)")
     print(f"   strokes   min/med/max: {strokes[0]}/"
           f"{strokes[len(strokes) // 2]}/{strokes[-1]}")
     print(f"   clearance min/med: {clearance[0]:.0f}/"

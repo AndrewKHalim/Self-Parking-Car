@@ -1,12 +1,6 @@
 #pragma once
 
-// the dashboard, as one self-contained page. no cdn, no framework, no webfont:
-// the car may be serving this from its own access point with no route off it,
-// so every byte has to come from the esp32.
-//
-// the page is fed by a websocket that reconnects on its own, and it keeps the
-// last 300 samples itself. nothing is fetched per frame, so the only traffic is
-// the ten json messages a second the firmware sends.
+// The dashboard, as one self-contained page. No CDN, no framework, no webfont, so every byte comes from the ESP32. A websocket reconnects on its own, the page keeps the last 300 samples, and ten JSON messages a second is all the traffic.
 
 #include <Arduino.h>
 
@@ -68,9 +62,7 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(<!doctype html>
 <button id="start" disabled>start</button>
 
 <script>
-// the firmware sends integers: t in ms, x in mm, psi in milliradians, the gaps
-// in mm, the servo in degrees. the page converts for display and keeps the
-// car's own units in the history.
+// The firmware sends integers. t in ms, x and gaps in mm, psi in milliradians, servo in degrees. The page converts for display only.
 const WINDOW = 300;
 const MRAD_TO_DEG = 180 / Math.PI / 1000;
 const REAR_OUT_OF_RANGE_MM = 8000;
@@ -84,8 +76,7 @@ const canvas = byId('chart');
 const ctx = canvas.getContext('2d');
 let retry = 0;
 
-// a websocket that stays up on its own. the car is an access point that may
-// reboot or drop the link, and the page has to survive both without a reload.
+// The websocket stays up on its own. The car is an access point that may reboot or drop the link, and the page has to survive both without a reload.
 function connect() {
   const scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
   const sock = new WebSocket(scheme + location.host + '/ws');
@@ -107,8 +98,7 @@ function connect() {
   };
 }
 
-// one message is one sample. the button follows what the control task will
-// accept: a start needs the calibration and cannot arrive during a run.
+// One message is one sample. The button follows what the control task will accept. A start needs the calibration and cannot arrive during a run.
 function show(d) {
   byId('v-t').textContent = (d.t / 1000).toFixed(1) + ' s';
   byId('v-x').textContent = d.x + ' mm';
@@ -126,8 +116,7 @@ function show(d) {
   draw();
 }
 
-// match the backing store to the css size and the screen density, so the lines
-// stay sharp on a phone without any layout maths elsewhere.
+// Match the backing store to the CSS size and the screen density, so the lines stay sharp on a phone without layout maths elsewhere.
 function fit() {
   const ratio = Math.min(2, window.devicePixelRatio || 1);
   const w = canvas.clientWidth;
@@ -140,9 +129,7 @@ function fit() {
   return [w, h];
 }
 
-// each series is scaled to its own peak over the window. x moves in millimetres
-// and psi in degrees, so a shared scale would flatten one of them; the legend
-// is what tells the reader that the two lines share a canvas, not a scale.
+// Each series is scaled to its own peak. x in millimetres and psi in degrees on a shared scale would flatten one of them.
 function series(values, w, h, colour) {
   if (values.length < 2) return;
   let peak = 1;
@@ -175,8 +162,7 @@ function draw() {
 
 window.addEventListener('resize', draw);
 
-// the start request is a plain fetch. the control task decides: it refuses one
-// before the calibration and ignores one while a run is in progress.
+// The start request is a plain fetch. The control task decides, and it refuses one before the calibration and ignores one while a run is in progress.
 button.addEventListener('click', () => {
   button.disabled = true;
   fetch('/start').catch(() => {});

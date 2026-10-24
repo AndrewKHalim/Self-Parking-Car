@@ -1,15 +1,5 @@
-// direct checks of the sensor geometry.
-//
-// the simulator cannot cover the clearance interlock: the cap only binds in a
-// bay narrower than the car, and in such a bay the side sensors lose the wall
-// before the cap matters. so the geometry is checked here instead, where the
-// numbers can be stated rather than swept for.
-//
-//   g++ -std=c++17 -O2 -Wall -Wextra -Icontrol -o build/geom_checks
-//       tools/geom_checks.cpp -lm
-//
-// every check prints a line and sets the exit status, so a failure is visible
-// in a build log.
+// Direct checks of the sensor geometry. The simulator cannot cover the clearance interlock, so the numbers are stated here rather than swept for.
+// g++ -std=c++17 -O2 -Wall -Wextra -Icontrol -o build/geom_checks tools/geom_checks.cpp -lm
 
 #include <cmath>
 #include <cstdio>
@@ -27,18 +17,15 @@ static void check(const char* what, bool ok, const char* detail) {
 int main() {
   Config cfg;
 
-  // the sensor reports 8190 when it sees nothing and 65535 on a timeout.
-  // neither is a distance. ---
+  // The sensor reports 8190 with no target and 65535 on a timeout.
   check("validRange rejects the no-target reading",
         !geom::validRange(8.190f), "8190 mm");
   check("validRange rejects the timeout reading",
         !geom::validRange(65.535f), "65535 mm");
   check("validRange rejects a zero reading", !geom::validRange(0.0f), "0 mm");
   check("validRange accepts a normal gap", geom::validRange(0.25f), "250 mm");
-  // end
 
-  // an unusable side reading leaves the clearance unknown, and an unknown
-  // clearance must not open the yaw up. ---
+  // An unusable side reading leaves the clearance unknown, and an unknown clearance must not open the yaw up.
   const float unknown = geom::clearance(cfg, 0.25f, 8.190f);
   check("clearance is unknown when a side reading is bad",
         unknown < 0.0f, "negative means unknown");
@@ -46,10 +33,8 @@ int main() {
   const float known = geom::clearance(cfg, 0.25f, 0.18f);
   check("clearance is the tighter side", known > 0.121f && known < 0.124f,
         "the 58 mm body offset comes off");
-  // end
 
-  // the cap has to fall to the small end when the clearance is unknown, and it
-  // has to bind below the cone-safe limit when the clearance is small. ---
+  // The cap falls to the small end on an unknown clearance and binds below the cone-safe limit on a small one.
   const float capUnknown = geom::peakYawCap(cfg, unknown);
   check("the yaw cap fails closed", capUnknown == cfg.psi_cap_min,
         "the small end of the range");
@@ -62,11 +47,8 @@ int main() {
   const float capRoomy = geom::peakYawCap(cfg, 0.180f);
   check("the yaw cap opens up with room", capRoomy == cfg.psi_cap_max,
         "the clearance is not what binds in a normal bay");
-  // end
 
-  // the estimate has to recover the pose it was built from. the gaps are built
-  // from the geometry in geometry.h, so this is a round trip through the sensor
-  // model and back. ---
+  // Round trip. Gaps built from geometry.h, then the pose recovered from them.
   for (float psi = -0.15f; psi <= 0.151f; psi += 0.05f) {
     for (float x = -0.05f; x <= 0.051f; x += 0.025f) {
       const float ux = sinf(psi);
@@ -75,17 +57,12 @@ int main() {
       const float gR = 0.5f * 0.5f - (x - car::d_R * ux - cfg.e_R * lx);
 
       Config c = cfg;
-      // the calibration is taken with the car centred and squared up, so S0 is
-      // the sensor sum in that pose and the trim is the half difference of the
-      // two readings in it. ---
+      // Calibration is taken with the car centred and squared up. S0 is the sensor sum in that pose, and the trim is half the difference.
       c.S0 = 0.5f - (cfg.e_L + cfg.e_R);
       c.trim = 0.5f * (cfg.e_R - cfg.e_L);
-      // end
       const geom::Pose p = geom::pose(c, gL, gR);
 
-      // the heading comes out of the sum as the sine of the angle, so the
-      // estimate is a first-order one: the error at the top of the cone-safe
-      // window is a hundredth of a degree. ---
+      // The heading comes out of the sum as the sine, a first-order estimate worth a hundredth of a degree of error at the cone edge.
       const bool ok = p.ok && fabsf(p.x - x) < 1e-4f
                       && fabsf(p.psi - psi) < 1e-3f;
       char detail[128];
@@ -95,7 +72,6 @@ int main() {
       check("the estimate recovers the pose", ok, detail);
     }
   }
-  // end
 
   printf("\n%s\n", failures == 0 ? "all checks passed"
                                 : "there were failures");

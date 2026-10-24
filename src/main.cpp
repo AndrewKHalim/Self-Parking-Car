@@ -1,16 +1,4 @@
-// the runtime. two freertos tasks, one per core: the control loop on core 1 and
-// everything that talks to the network on core 0.
-//
-// they are split because they have nothing to do with each other. the control
-// loop has to tick at 30 hz or the stroke profiles plan one manoeuvre and do
-// another, and it touches the i2c bus, the servo and the motor. the web task
-// waits on wifi association, formats json and hands it to the socket, none of
-// which may delay a sensor read. on one core they would.
-//
-// the two tasks share one word going up and one struct going down. the
-// supervisor object belongs to the control task and is never handed over: the
-// queue carries a copy of the telemetry, so the web side cannot read a state
-// that is halfway through an update.
+// The runtime. Two FreeRTOS tasks, one core each. The 30 Hz control loop on core 1 touches I2C, servo and motor. The network side on core 0 waits on wifi and formats JSON, and neither may delay a sensor read. The supervisor belongs to the control task. The queue carries a copy of the telemetry, so the web side cannot read a half-updated state.
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -29,55 +17,30 @@
 #include "supervisor.h"
 #include "wifi_config.h"
 
-// the control loop ticks at 30 hz, which is what Config::dt says. the task
-// period has to match it: the control law measures its own dt, but the stroke
-// profiles assume a tick, so a task running at another rate would plan against
-// one period and run at another. ---
+// 30 Hz, which is what Config::dt says. The control law measures its own dt, but the stroke profiles assume a tick.
 constexpr uint32_t CONTROL_PERIOD_MS = 33;
-// end
 
-// ten messages a second is enough for a phone to watch a manoeuvre that takes
-// seconds, and it keeps the socket work far below the tick rate. the queue
-// overwrite means a slower rate costs nothing but a skipped sample. ---
+// Ten a second is enough to watch a maneuver that takes seconds, and keeps the socket work far below the tick rate.
 constexpr uint32_t TELEMETRY_PERIOD_MS = 100;
-// end
 
-// how long the web task waits for the configured network before it gives up and
-// brings up its own access point. ---
+// How long the web task waits for the configured network before falling back to its own access point.
 constexpr uint32_t WIFI_TIMEOUT_MS = 15000;
-// end
 
-// the core map. control is on core 1 with the arduino loop task. the web task
-// and async tcp are on core 0, beside the wifi and lwip tasks, which the
-// platform's sdkconfig already pins there: CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0
-// and CONFIG_LWIP_TCPIP_TASK_AFFINITY=0x0. async tcp is pinned by
-// CONFIG_ASYNC_TCP_RUNNING_CORE in platformio.ini, because the library would
-// otherwise let freertos choose and the http and websocket work could land on
-// the control core. ---
+// The core map. Control sits on core 1 with the Arduino loop task. The web task and async TCP sit on core 0 beside wifi and lwip, pinned there by sdkconfig and by CONFIG_ASYNC_TCP_RUNNING_CORE in platformio.ini.
 constexpr BaseType_t CONTROL_CORE = 1;
 constexpr BaseType_t WEB_CORE = 0;
-// end
 
-// stack sizes are bytes on the esp-idf port, not words. the control task holds
-// the supervisor and reads three sensors per tick; the web task formats json
-// and starts the server. ---
+// Stack sizes are bytes on the esp-idf port, not words. The control task holds the supervisor and reads three sensors per tick.
 constexpr uint32_t CONTROL_STACK = 8192;
 constexpr UBaseType_t CONTROL_PRIORITY = 5;
 constexpr uint32_t WEB_STACK = 8192;
 constexpr UBaseType_t WEB_PRIORITY = 2;
-// end
 
-// the handoff. the queue holds one item and the producer overwrites it, so the
-// consumer can never fall behind and a slow socket can never delay the control
-// loop: the web task either gets the newest tick or nothing at all. ---
+// The handoff. One item, overwritten by the producer, so the consumer cannot fall behind and a slow socket cannot delay the control loop.
 static QueueHandle_t telemetryQueue = nullptr;
-// end
 
-// the only word that crosses the other way. it is a request rather than a
-// command, because the control task still refuses it before the calibration
-// and ignores it while a run is in progress. ---
+// The only word crossing the other way, and it is a request. The control task still refuses it before the calibration and during a run.
 static std::atomic<bool> startRequest{false};
-// end
 
 static AsyncWebServer server(80);
 static AsyncWebSocket socket("/ws");
@@ -103,9 +66,7 @@ static const char* strokeName(Stroke s) {
   return "unknown";
 }
 
-// one json object per message, all integers. the page converts at the edge, so
-// nothing here needs float formatting: t is ms, x, rear, travel, clearance are
-// mm, psi, cap and peak are milliradians, servo is degrees. ---
+// One JSON object per message, numeric fields as integers. t is ms, x, rear, travel, clearance are mm, psi, cap, peak are milliradians, servo degrees.
 static void publishTelemetry(const Telemetry& t) {
   if (socket.count() == 0) return;
 
@@ -130,10 +91,8 @@ static void publishTelemetry(const Telemetry& t) {
            (int)t.rearFault, (int)t.travelFault, (int)t.outOfSpec);
   socket.textAll(line);
 }
-// end
 
-// the control task owns the supervisor, and through it the hal: it is the only
-// task that writes the servo, the motor or the i2c bus after boot.
+// The control task owns the supervisor and through it the HAL. After boot it is the only task that writes the servo, the motor or the I2C bus.
 static void controlTask(void* arg) {
   Esp32Hal* h = static_cast<Esp32Hal*>(arg);
 
@@ -141,9 +100,7 @@ static void controlTask(void* arg) {
   sup.attach(h);
   sup.calibrate();
 
-  // vTaskDelayUntil keeps the period honest. a plain delay would add the time
-  // the tick took to every period, and the supervisor integrates over measured
-  // time while the profiles assume the nominal one. ---
+  // vTaskDelayUntil keeps the period honest, where a plain delay would add the tick's own cost to every period.
   TickType_t last = xTaskGetTickCount();
 
   for (;;) {
@@ -162,12 +119,9 @@ static void controlTask(void* arg) {
     xQueueOverwrite(telemetryQueue, &sup.tel);
     vTaskDelayUntil(&last, pdMS_TO_TICKS(CONTROL_PERIOD_MS));
   }
-  // end
 }
 
-// join the configured network, or fall back to an access point of our own. the
-// wait is bounded, and the fallback is the reason the page is reachable on a
-// bench where the configured network is not there.
+// Join the configured network or fall back to an access point, so the page is reachable on a bench where that network is not there.
 static void connectNetwork() {
   WiFi.setHostname(HOSTNAME);
   WiFi.mode(WIFI_STA);
@@ -192,9 +146,7 @@ static void connectNetwork() {
                 WiFi.softAPIP().toString().c_str());
 }
 
-// the web task brings the network and the server up and then publishes the
-// newest telemetry every hundred milliseconds. the async server and the socket
-// run their own task once started, so this one only feeds them.
+// Bring the network and server up, then publish telemetry every 100 ms. The async server runs its own task once started, so this one only feeds it.
 static void webTask(void* arg) {
   (void)arg;
 
@@ -204,13 +156,11 @@ static void webTask(void* arg) {
     req->send(200, "text/html", DASHBOARD_HTML);
   });
 
-  // the page's button. the handler runs in the socket task and only sets the
-  // flag, so it never blocks on the control loop. ---
+  // The page's button. This runs in the socket task and only sets the flag, so it never blocks on the control loop.
   server.on("/start", HTTP_GET, [](AsyncWebServerRequest* req) {
     startRequest.store(true);
     req->send(200, "application/json", "{\"start\":true}");
   });
-  // end
 
   server.addHandler(&socket);
   server.begin();
@@ -218,16 +168,12 @@ static void webTask(void* arg) {
   TickType_t last = xTaskGetTickCount();
   Telemetry t;
 
-  // one receive with no wait per period: if the control task has not published
-  // since the last look there is nothing new to send, and the page keeps what
-  // it has. the delay holds the send rate at ten a second whatever the tick
-  // costs. ---
+  // One receive with no wait per period. If nothing has been published since the last look there is nothing to send, and the page keeps what it has.
   for (;;) {
     if (xQueueReceive(telemetryQueue, &t, 0) == pdTRUE) publishTelemetry(t);
     socket.cleanupClients();
     vTaskDelayUntil(&last, pdMS_TO_TICKS(TELEMETRY_PERIOD_MS));
   }
-  // end
 }
 
 void setup() {
@@ -236,11 +182,8 @@ void setup() {
   Serial.println();
   Serial.println("autoparking-car: boot");
 
-  // the hardware comes up here, on the arduino task, before either worker
-  // exists: the bus and the address assignment are not safe to share with a
-  // task that is already reading them. ---
+  // The hardware comes up before either worker exists, since the bus and the address assignment are not safe to share with a task already reading them.
   if (!hal.begin()) Serial.println("one or more sensors did not answer");
-  // end
 
   telemetryQueue = xQueueCreate(1, sizeof(Telemetry));
   if (telemetryQueue == nullptr) {
@@ -261,10 +204,8 @@ void setup() {
 }
 
 void loop() {
-  // the work is in the two tasks. this says the runtime is alive and touches
-  // nothing the car depends on. ---
+  // The work is in the two tasks. This says the runtime is alive and touches nothing the car depends on.
   delay(5000);
   Serial.printf("alive %lus heap %luB\n", (unsigned long)(millis() / 1000UL),
                 (unsigned long)ESP.getFreeHeap());
-  // end
 }

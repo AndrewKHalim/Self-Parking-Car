@@ -1,18 +1,9 @@
-// compile check for the control core.
-//
-// the firmware includes the core through src/esp32_hal.h, so this is no longer
-// the only way it reaches the target compiler. it stays as a check that the
-// entry points compile and link with no hal attached and nothing running: the
-// geometry, the loop and the supervisor against a plain config. a signature
-// that changes under main.cpp's feet shows up here as a build error rather than
-// as a behaviour change on the car.
+// Compile check for the control core. Geometry, loop and supervisor against a plain config, with no HAL attached. A signature change breaks the build here instead of changing behaviour on the car.
 
 #include "supervisor.h"
 
-// the results have to land somewhere the optimiser cannot remove, or the calls
-// that produce them are dropped before they compile. ---
+// The results have to land somewhere the optimiser cannot remove, or the calls that produce them are dropped before they compile.
 volatile float controlBuildSink = 0.0f;
-// end
 
 void controlBuildCheck() {
   Config cfg;

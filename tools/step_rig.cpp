@@ -1,19 +1,5 @@
-// step-response rig for the lateral position loop.
-//
-// the controlled variable is the rear axle lateral offset x, the same state
-// the parking supervisor regulates. the reference is a step in x while the
-// car reverses at the configured speed. the controller is the real
-// Control::step from control/control.h, with the xRef reference hook.
-//
-// the plant is the bicycle model and the servo model from tools/sim_main.cpp,
-// with every parameter taken from Config: servo_deadband, servo_rate,
-// steer_model, scrub_gain, speed and the gains. the plant below mirrors the
-// simulator plant; the drive ramp is not used, because accel is a simulator
-// field rather than a config value, so the car starts at driveSpeed(cfg).
-//
-//   g++ -std=c++17 -O2 -Wall -Wextra -Icontrol -o build/step_rig
-//       tools/step_rig.cpp -lm
-//   ./build/step_rig
+// Step-response rig for the lateral position loop. It steps the rear axle offset x while the car reverses at driveSpeed(cfg). The controller is the real Control::step with its xRef hook, and the plant is the bicycle and servo model from tools/sim_main.cpp. The drive ramp is left out, since accel is a simulator field.
+// g++ -std=c++17 -O2 -Wall -Wextra -Icontrol -o build/step_rig tools/step_rig.cpp -lm
 
 #include <cmath>
 #include <cstdio>
@@ -39,7 +25,7 @@ struct State {
   float travel = 0.0f;
 };
 
-// one servo tick, the model from tools/sim_main.cpp.
+// One servo tick, using the model from tools/sim_main.cpp.
 void servoStep(float cmd, float& wheel, float dt, float deadband, float rate) {
   const float err = cmd - wheel;
   if (fabsf(err) > deadband) {
@@ -50,7 +36,7 @@ void servoStep(float cmd, float& wheel, float dt, float deadband, float rate) {
   }
 }
 
-// one plant tick: servo, rear axle kinematics, parallel scrub.
+// One plant tick, covering servo, rear axle kinematics and parallel scrub.
 void plantStep(const Config& c, State& s, float cmd, float dt) {
   servoStep(cmd, s.delta, dt, c.servo_deadband, c.servo_rate);
 
@@ -76,7 +62,7 @@ void plantStep(const Config& c, State& s, float cmd, float dt) {
   }
 }
 
-}  // namespace
+}
 
 int main(int argc, char** argv) {
   Config cfg;
@@ -119,15 +105,13 @@ int main(int argc, char** argv) {
     if (!parent.empty()) std::filesystem::create_directories(parent, ec);
   }
 
-  // the parking loop runs at the configured sensor period with the plant
-  // sub-stepped at 1 ms, and the controller sees the nominal speed. ---
+  // The parking loop runs at the configured sensor period with the plant sub-stepped at 1 ms, and the controller sees the nominal speed.
   if (speedMps > 0.0f) cfg.speed = speedMps;
   const float dt = cfg.dt;
   const float vNom = -driveSpeed(cfg);
   const float psiCap = cfg.psi_cap_max;
   const int subN = (int)lroundf(dt / 0.001f);
   const float subDt = dt / (float)subN;
-  // end
 
   State s;
   s.v = vNom;
@@ -162,9 +146,7 @@ int main(int argc, char** argv) {
   }
   fclose(f);
 
-  // servo-only step traces. the command amplitude is a test input, not a
-  // servo parameter; the small one is half the configured deadband so it
-  // shows the dead zone. ---
+  // Servo-only step traces. The amplitude is a test input rather than a servo parameter, and the small one is half the deadband, so it shows the dead zone.
   const float bigCmd = 20.0f * kDeg;
   const float smallCmd = 0.5f * cfg.servo_deadband;
   float bigWheel = 0.0f;
@@ -188,7 +170,6 @@ int main(int argc, char** argv) {
             small / kDeg, smallWheel / kDeg);
   }
   fclose(g);
-  // end
 
   FILE* h = fopen(infoOut.c_str(), "w");
   if (h == nullptr) {
