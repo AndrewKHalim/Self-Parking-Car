@@ -13,10 +13,11 @@
 
 // how the front wheels are steered. the chassis has not been measured, so this
 // is a switch. the geometry is the same either way, the limit is not: with
-// Ackermann steering the inner wheel reaches its stop first. ---
+// Ackermann steering the inner wheel reaches its stop first. PARALLEL holds
+// both wheels at one angle and ACKERMANN makes them follow the relation. ---
 enum class SteerModel {
-  PARALLEL,   // both front wheels at the same angle
-  ACKERMANN,  // the wheels follow the Ackermann relation
+  PARALLEL,
+  ACKERMANN,
 };
 // end
 
@@ -30,11 +31,11 @@ enum class MotorDriver {
 // end
 
 // what the driver does to the drive: the voltage it drops at the drive current
-// and the deceleration it brakes at. the drops are datasheet figures at about
-// an amp, the brake figures are placeholders. ---
+// in volts and the deceleration it brakes at in m/s^2. the drops are datasheet
+// figures at about an amp, the brake figures are placeholders. ---
 struct DriveModel {
-  float drop;        // V
-  float brakeDecel;  // m/s^2
+  float drop;
+  float brakeDecel;
 };
 
 inline DriveModel driveModel(MotorDriver d) {
@@ -73,7 +74,7 @@ constexpr float d_L     = 0.17f;
 constexpr float d_R     = 0.07f;
 constexpr float e_out_L = 0.05797f;
 constexpr float e_out_R = 0.05797f;
-}  // namespace car
+}
 // end
 
 struct Config {

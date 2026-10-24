@@ -40,7 +40,7 @@ namespace ack {
 // turn radius of the rear axle centre in metres. it is unbounded going
 // straight, so it is capped at a large finite value: callers subtract from it
 // and divide by it, and infinities survive neither. ---
-inline float turnRadius(const Config& /*c*/, float deq) {
+inline float turnRadius(const Config& , float deq) {
   const float s = tanf(fabsf(deq));
   if (s <= 1e-6f) return 1.0e6f;
   return car::L_wb / s;
@@ -80,11 +80,13 @@ inline float deltaOut(const Config& c, float deq) {
 // degrees high at the fine stroke amplitude and 0.69 degrees high at full lock,
 // which is 3 percent of tan(delta) and shows up as a turn-radius bias.
 // ---
-inline float deltaEq(const Config& /*c*/, float din, float dout) {
+inline float deltaEq(const Config& , float din, float dout) {
   const float ci = tanf(din);
   const float co = tanf(dout);
   if (fabsf(ci) < 1e-6f || fabsf(co) < 1e-6f) return 0.0f;
-  const float s = 1.0f / ci + 1.0f / co;  // equals 2*cot(delta_eq)
+  // the sum of the cotangents is twice cot(delta_eq). ---
+  const float s = 1.0f / ci + 1.0f / co;
+  // end
   if (fabsf(s) < 1e-6f) return 0.0f;
   return atanf(2.0f / s);
 }
@@ -113,4 +115,4 @@ inline float deltaEqMax(const Config& c) {
 }
 // end
 
-}  // namespace ack
+}

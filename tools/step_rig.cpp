@@ -76,7 +76,7 @@ void plantStep(const Config& c, State& s, float cmd, float dt) {
   }
 }
 
-}  // namespace
+}
 
 int main(int argc, char** argv) {
   Config cfg;

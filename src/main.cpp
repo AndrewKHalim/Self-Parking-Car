@@ -103,9 +103,10 @@ static const char* strokeName(Stroke s) {
   return "unknown";
 }
 
-// one json object per message, all integers. the page converts at the edge, so
-// nothing here needs float formatting: t is ms, x, rear, travel, clearance are
-// mm, psi, cap and peak are milliradians, servo is degrees. ---
+// one json object per message, with the numeric fields as integers. phase and
+// stroke are strings. the page converts at the edge, so nothing here needs
+// float formatting: t is ms, x, rear, travel, clearance are mm, psi, cap and
+// peak are milliradians, servo is degrees. ---
 static void publishTelemetry(const Telemetry& t) {
   if (socket.count() == 0) return;
 

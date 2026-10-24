@@ -77,9 +77,10 @@ struct Control {
 
     const float sgn = (vSigned >= 0.0f) ? 1.0f : -1.0f;
 
-    // gains from (omega_n, zeta) and the current speed. ---
-    const float kg = 2.0f * c->zeta * c->omega_n * car::L_wb / v;   // inner gain
-    const float kx = c->omega_n / (2.0f * c->zeta * v);            // outer gain
+    // gains from (omega_n, zeta) and the current speed. kg is the inner gain
+    // and kx the outer gain. ---
+    const float kg = 2.0f * c->zeta * c->omega_n * car::L_wb / v;
+    const float kx = c->omega_n / (2.0f * c->zeta * v);
     // end
 
     // outer loop: where should the car point to come back to the centreline?

@@ -147,19 +147,30 @@ between about 37.7 and 42.1 mm and does not settle.
 what the numbers assume:
 
 - simulation, not hardware. nothing here is a measurement.
+- the rig measures `x` directly. it has no ToF geometry, cone, range failures,
+  sensor latency, walls or clearance cap, and no parking supervisor in the
+  loop.
 - the servo numbers are the SG90 datasheet figures already in `Config`:
   600 deg/s at no load (0.10 s per 60 degrees at 4.8 V), and a 1.8 degree dead
   band mapped through the 1000 to 2000 us position table.
+- the servo model is dead band plus slew only: no load, no backlash, no
+  compliance, no position feedback.
+- the figures use the default parallel steering and the 25 degree mechanical
+  limit. Ackermann would clamp to `deltaEqMax`, about 20 degrees.
 - constant speed. the drive ramp is not modelled, because `accel` is a
   simulator field and not a `Config` value, so the car starts at the
   configured speed.
+- the speed is commanded constant, but the parallel scrub term bleeds it over
+  the run, -0.080 to -0.07795 m/s and -0.150 to -0.14862 m/s. the controller
+  is fed the nominal speed.
 - no measurement noise. the seed is fixed at 1, and `--noise` adds Gaussian
   noise on `x` for a repeatable noisy run.
 - 30 Hz control, with the plant substepped at 1 ms.
 - the integral gain is zero (`ki = 0`), so there is no integral action to trim
   the offset the dead band leaves. the measured residual is 1.61 percent at
   0.08 m/s and 0.79 percent at 0.15 m/s.
-- the run starts at `x = 0`, the parking target, and steps away from it.
+- the run starts at `x = 0`, the parking target, in free space with psi and
+  delta at zero, and the step lands at 1.0 s.
 
 reproduce both runs and the plots:
 
@@ -225,11 +236,12 @@ access point at `192.168.4.1`. the SSID, the password and the fallback are in
 telemetry crosses from the control task to the web task through a one-deep
 queue written with `xQueueOverwrite`, so a slow socket can never hold up the
 control loop: the web task either gets the newest tick or nothing at all. the
-JSON carries integers only, t in ms, distances in mm, angles in milliradians
-and the servo in whole degrees. the web task drains the queue every 100 ms and
-sends, which is 10 Hz. the start request crosses the other way as a
-`std::atomic<bool>`, set by `/start` and cleared by the control task, which
-still refuses it before the calibration and ignores it mid-run.
+JSON carries the numeric fields as integers, t in ms, distances in mm, angles
+in milliradians and the servo in whole degrees. phase and stroke are strings.
+the web task drains the queue every 100 ms and sends, which is 10 Hz. the
+start request crosses the other way as a `std::atomic<bool>`, set by `/start`
+and cleared by the control task, which still refuses it before the calibration
+and ignores it mid-run.
 
 this is compile-verified, not hardware-verified. the firmware builds and links
 for the target, but no board has run it, so no sensor has been read, the servo
@@ -333,7 +345,7 @@ angle does, and the equivalent angle is held below that. the motor driver
 decides the speed and the stopping distance: the DRV8833 and the LM298 have
 the same truth table, so the firmware does not care which one is fitted, but
 the LM298 drops several volts across itself and would run the car at about
-two thirds of the speed.
+71 percent of the speed.
 
 ## the layout
 
@@ -360,9 +372,10 @@ built: the simulator on the host, the firmware for the target.
 
 ## status
 
-the firmware builds and links for the target, at RAM 14.7% and Flash 30.6%.
-the control core, the HAL adapter and the dashboard are written and compile
-for the target, and the host simulator builds with them. the board has never
-been flashed: no sensor reading, servo position or WiFi join has been verified
-on real hardware. the manoeuvre itself remains unproven until the car runs,
-and the step response above is simulated.
+the firmware builds and links for the N16R8 at RAM 14.7 percent and Flash 15.6
+percent of the 6,553,600 byte app partition (1,024,170 bytes). the control
+core, the HAL adapter and the dashboard are written and compile for the
+target, and the host simulator builds with them. the board has never been
+flashed: no sensor reading, servo position or WiFi join has been verified on
+real hardware. the manoeuvre itself remains unproven until the car runs, and
+the step response above is simulated.

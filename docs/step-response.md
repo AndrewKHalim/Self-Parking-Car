@@ -47,12 +47,22 @@ behaviour is unchanged.
 ## assumptions
 
 - simulation only. nothing here is a hardware measurement.
+- the rig measures `x` directly. it has no ToF geometry, cone, range failures,
+  sensor latency, walls or clearance cap, and no parking supervisor in the
+  loop.
 - the servo values are the SG90 datasheet numbers already in `Config`:
   `servo_deadband = 0.0314 rad` (10 us through the 1 to 2 ms angle range) and
   `servo_rate = 10.472 rad/s` (0.10 s/60 degrees at 4.8 V).
+- the servo model is dead band plus slew only: no load, no backlash, no
+  compliance, no position feedback.
+- the figures use the default parallel steering and the 25 degree mechanical
+  limit. Ackermann would clamp to `deltaEqMax`, about 20 degrees.
 - constant speed. the drive ramp is not modelled because `accel` is a
   simulator field rather than a `Config` value, so the car starts at
   `driveSpeed(cfg)`.
+- the speed is commanded constant, but the parallel scrub term bleeds it over
+  the run, -0.080 to -0.07795 m/s and -0.150 to -0.14862 m/s. the controller
+  is fed the nominal speed.
 - no measurement noise by default. the seed is fixed at 1 and `--noise`
   adds Gaussian noise on `x` for a repeatable noisy run.
 - the 40 mm step makes the steering command reach the 25 degree limit at the
@@ -60,7 +70,8 @@ behaviour is unchanged.
 - the nominal 0.15 m/s case cannot hold the 2 percent band: with the 1.8
   degree dead band the position dead zone is 2.35 mm, against a band of
   0.80 mm. the second figure shows that limit cycle.
-- the run starts at `x = 0`, the parking target, and steps away from it.
+- the run starts at `x = 0`, the parking target, in free space with psi and
+  delta at zero, and the step lands at 1.0 s.
 - the integral gain is zero, so there is no integral action to trim the offset
   the dead band leaves. the measured residual is 1.61 percent at 0.08 m/s and
   0.79 percent at 0.15 m/s.
@@ -78,12 +89,13 @@ behaviour is unchanged.
 | peak heading | 12.68 deg | 7.97 deg |
 
 the primary run settles inside the 0.80 mm band with no overshoot. the
-residual 0.65 mm comes from the servo dead band: the final heading trim is
-below the dead band, so the wheel stops a fraction short.
+residual 0.65 mm comes from the servo dead band: the steering command sits
+just below the 1.8 degree wheel dead band (about -1.66 degrees), so the wheel
+stops short; the heading trim is about -0.31 degrees.
 
-the nominal run rises to about 38.5 mm by 4 s, dips, climbs to 42.1 mm
-around 16 s and turns back. the band is crossed repeatedly and the position
-sweeps roughly 37.7 to 42.1 mm.
+the nominal run rises to 37.6 mm at 4 s, 38.3 mm at 5 s, then cycles: it
+climbs to 42.1 mm around 16 s and turns back. the band is crossed repeatedly
+and the position sweeps roughly 37.7 to 42.1 mm.
 
 ## files
 

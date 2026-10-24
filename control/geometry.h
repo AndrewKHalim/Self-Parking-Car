@@ -31,11 +31,15 @@ constexpr float kPi = 3.14159265f;
 inline bool validRange(float m) { return m > 0.0f && m < 8.0f; }
 // end
 
+// the rear axle state the side readings resolve to: x is the lateral offset
+// from the bay centreline in metres, psi the heading relative to the bay lines
+// in radians, and ok says whether the pair of readings was usable. ---
 struct Pose {
-  float x = 0.0f;    // lateral offset of the rear axle from the bay centreline [m]
-  float psi = 0.0f;  // heading relative to the bay lines [rad]
+  float x = 0.0f;
+  float psi = 0.0f;
   bool ok = false;
 };
+// end
 
 // turn a pair of side readings into the state estimate. ---
 inline Pose pose(const Config& c, float gL, float gR) {
@@ -63,7 +67,7 @@ inline Pose pose(const Config& c, float gL, float gR) {
 // wall, so the body edge is that much closer in. a reading that is not usable
 // leaves the clearance unknown, and an unknown clearance comes back negative so
 // the caller can hold the car back rather than let it swing. ---
-inline float clearance(const Config& /*c*/, float gL, float gR) {
+inline float clearance(const Config& , float gL, float gR) {
   if (!validRange(gL) || !validRange(gR)) return -1.0f;
   float left = gL - car::e_out_L;
   float right = gR - car::e_out_R;
@@ -87,4 +91,4 @@ inline float peakYawCap(const Config& c, float clear) {
 }
 // end
 
-}  // namespace geom
+}
