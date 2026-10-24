@@ -48,8 +48,8 @@ inline float turnRadius(const Config& /*c*/, float deq) {
 // end
 
 // inner wheel angle in radians. the inner wheel is the one on the side the car
-// turns towards, and it always takes more lock than delta_eq: at the 25 degree
-// equivalent limit the inner wheel takes about 5 degrees more. ---
+// turns towards, and it always takes more lock than delta_eq: at a 25 degree
+// equivalent angle the inner wheel takes about 5 degrees more. ---
 inline float deltaIn(const Config& c, float deq) {
   const float R = turnRadius(c, deq);
   const float r = R - 0.5f * car::t_front;
