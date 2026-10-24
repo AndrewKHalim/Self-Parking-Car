@@ -46,9 +46,13 @@ constexpr uint32_t TELEMETRY_PERIOD_MS = 100;
 constexpr uint32_t WIFI_TIMEOUT_MS = 15000;
 // end
 
-// core 1 is where the arduino loop runs and nothing else of ours does. core 0
-// carries the wifi stack, so the web task belongs beside it rather than in the
-// control loop's way. ---
+// the core map. control is on core 1 with the arduino loop task. the web task
+// and async tcp are on core 0, beside the wifi and lwip tasks, which the
+// platform's sdkconfig already pins there: CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0
+// and CONFIG_LWIP_TCPIP_TASK_AFFINITY=0x0. async tcp is pinned by
+// CONFIG_ASYNC_TCP_RUNNING_CORE in platformio.ini, because the library would
+// otherwise let freertos choose and the http and websocket work could land on
+// the control core. ---
 constexpr BaseType_t CONTROL_CORE = 1;
 constexpr BaseType_t WEB_CORE = 0;
 // end
