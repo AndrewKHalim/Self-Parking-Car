@@ -58,7 +58,7 @@ void setup() {
   sensorR.startContinuous(20);
 
   steering.setPeriodHertz(50);
-  steering.attach(PIN_SERVO, 500, 2500);
+  steering.attach(PIN_SERVO, 500, 2400);
   steering.write(90);  // neutral
 
   pinMode(PIN_MOTOR_IN1, OUTPUT);
