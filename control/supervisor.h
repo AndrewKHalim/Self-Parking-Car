@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstdio>
 
 #include "ackermann.h"
 #include "config.h"
@@ -57,6 +58,13 @@ struct Telemetry {
 };
 
 struct Supervisor {
+  // A copy would dangle: ctl.c points into this struct's own cfg and attach()
+  // injects the hal. ---
+  Supervisor() = default;
+  Supervisor(const Supervisor&) = delete;
+  Supervisor& operator=(const Supervisor&) = delete;
+  // end
+
   Config cfg;
   Hal* hal = nullptr;
   Control ctl;
@@ -181,7 +189,19 @@ struct Supervisor {
     peakYaw = 0.0f;
     travel = 0.0f;
     rearFaultTicks = 0;
+    filtPrimed = false;
+    noisePrimed = false;
+    noisePsiAcc = 0.0f;
+    noiseXAcc = 0.0f;
+    inTolTicks = 0;
+    invalidTicks = 0;
+    rearSeenValid = false;
+    rearSeen = 0.0f;
+    travelAtSeen = 0.0f;
+    last = -1.0f;
     tel.rearFault = false;
+    tel.travelFault = false;
+    tel.outOfSpec = false;
     ctl.reset();
     return true;
   }
@@ -668,21 +688,6 @@ struct Supervisor {
     float a = amp - cfg.servo_deadband;
     if (a < 0.05f) a = 0.05f;
     return a;
-  }
-
-  // Heading excursion needed to shift sideways by dx.
-  float translateExcursion(float dx, float amp) {
-    const float tanD = tanf(effAmp(amp));
-    float c = 1.0f - fabsf(dx) * tanD / (2.0f * car::L_wb);
-    if (c > 1.0f) c = 1.0f;
-    if (c < -1.0f) c = -1.0f;
-    return acosf(c);
-  }
-
-  // Lateral shift a given peak excursion produces.
-  float translateShift(float exc, float amp) {
-    const float tanD = tanf(effAmp(amp));
-    return 2.0f * car::L_wb * (1.0f - cosf(exc)) / tanD;
   }
 
   // Rough time for a heading excursion, used only as a safety limit.
