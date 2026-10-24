@@ -1,7 +1,7 @@
 #pragma once
 
-// every tunable in one place. a value marked PLACEHOLDER has not been measured,
-// and PLAN.md section 13 lists what still has to be measured.
+// every tunable in one place. PLAN.md section 13 lists what still has to be
+// measured.
 //
 // the car's own geometry is not here. it has been measured, so it sits as a
 // constant in the `car` namespace below: the shape of the car is a fact, not a

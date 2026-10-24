@@ -368,7 +368,7 @@ struct Supervisor {
     // end
 
     // rear limit. the trigger sits in front of the wanted final gap by the
-    // measured stopping distance plus the sensor latency margin. ---
+    // assumed stopping distance plus the sensor latency margin. ---
     const float trigger = cfg.rear_target + cfg.d_stop + cfg.rear_margin;
     if (geom::validRange(gRear)) {
       rearSeen = gRear;
