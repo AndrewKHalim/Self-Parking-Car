@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <cstdio>
 
 #include "ackermann.h"
 #include "config.h"
@@ -57,6 +58,13 @@ struct Telemetry {
 };
 
 struct Supervisor {
+  // A copy would dangle: ctl.c points into this struct's own cfg and attach()
+  // injects the hal. ---
+  Supervisor() = default;
+  Supervisor(const Supervisor&) = delete;
+  Supervisor& operator=(const Supervisor&) = delete;
+  // end
+
   Config cfg;
   Hal* hal = nullptr;
   Control ctl;
@@ -181,7 +189,19 @@ struct Supervisor {
     peakYaw = 0.0f;
     travel = 0.0f;
     rearFaultTicks = 0;
+    filtPrimed = false;
+    noisePrimed = false;
+    noisePsiAcc = 0.0f;
+    noiseXAcc = 0.0f;
+    inTolTicks = 0;
+    invalidTicks = 0;
+    rearSeenValid = false;
+    rearSeen = 0.0f;
+    travelAtSeen = 0.0f;
+    last = -1.0f;
     tel.rearFault = false;
+    tel.travelFault = false;
+    tel.outOfSpec = false;
     ctl.reset();
     return true;
   }
@@ -670,34 +690,19 @@ struct Supervisor {
     return a;
   }
 
-  // Heading excursion needed to shift sideways by dx.
-  float translateExcursion(float dx, float amp) {
-    const float tanD = tanf(effAmp(amp));
-    float c = 1.0f - fabsf(dx) * tanD / (2.0f * cfg.L_wb);
-    if (c > 1.0f) c = 1.0f;
-    if (c < -1.0f) c = -1.0f;
-    return acosf(c);
-  }
-
-  // Lateral shift a given peak excursion produces.
-  float translateShift(float exc, float amp) {
-    const float tanD = tanf(effAmp(amp));
-    return 2.0f * cfg.L_wb * (1.0f - cosf(exc)) / tanD;
-  }
-
   // Rough time for a heading excursion, used only as a safety limit.
   float excursionTime(float dpsi, float amp) {
     const float tanD = tanf(effAmp(amp));
     const float v = driveSpeed(cfg);
     if (tanD < 1e-6f || v < 1e-3f) return cfg.stroke_timeout;
-    return fabsf(dpsi) * cfg.L_wb / (v * tanD);
+    return fabsf(dpsi) * car::L_wb / (v * tanD);
   }
 
   // How far past the trigger the peak excursion lands, because the servo
   // needs time to swing to the opposite lock.
   float slewOvershoot(float amp) {
     const float tanD = tanf(effAmp(amp));
-    const float yawRate = cfg.speed * tanD / cfg.L_wb;
+    const float yawRate = cfg.speed * tanD / car::L_wb;
     return yawRate * (effAmp(amp) / cfg.servo_rate);
   }
 
@@ -801,7 +806,7 @@ struct Supervisor {
     // The largest shift available: put the peak at the cap. Its sign follows
     // the sign of the tangent, so it points the same way as the shift the
     // stroke is able to make. ---
-    float dxMax = 2.0f * (cfg.L_wb / tanD) * (cosf(cap) - cs) * strokeGain;
+    float dxMax = 2.0f * (car::L_wb / tanD) * (cosf(cap) - cs) * strokeGain;
     if (away && room <= 0.0f) dxMax = 0.0f;
     // end
 
@@ -815,7 +820,7 @@ struct Supervisor {
     // The peak that produces that shift. The gain is what previous strokes
     // actually achieved against what the model predicted, so the model is
     // asked for a proportionally larger excursion to land on the target. ---
-    float c = cs + (dx / strokeGain) * tanD / (2.0f * cfg.L_wb);
+    float c = cs + (dx / strokeGain) * tanD / (2.0f * car::L_wb);
     if (c > 1.0f) c = 1.0f;
     if (c < -1.0f) c = -1.0f;
     const float peakMag = acosf(c);

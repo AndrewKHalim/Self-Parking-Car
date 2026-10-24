@@ -40,10 +40,10 @@ namespace ack {
 // Turn radius of the rear axle centre in metres. It is unbounded going
 // straight, so it is capped at a large finite value: callers subtract from it
 // and divide by it, and infinities survive neither. ---
-inline float turnRadius(const Config& c, float deq) {
+inline float turnRadius(const Config& /*c*/, float deq) {
   const float s = tanf(fabsf(deq));
   if (s <= 1e-6f) return 1.0e6f;
-  return c.L_wb / s;
+  return car::L_wb / s;
 }
 // end
 
@@ -53,13 +53,13 @@ inline float turnRadius(const Config& c, float deq) {
 // L_wb = 0.18 and t_front = 0.15. ---
 inline float deltaIn(const Config& c, float deq) {
   const float R = turnRadius(c, deq);
-  const float r = R - 0.5f * c.t_front;
+  const float r = R - 0.5f * car::t_front;
   // A radius of t_front/2 or less is geometrically impossible, because the
   // turn circle would sit inside the track. It cannot happen while delta_max
   // is 25 degrees, but clamp rather than return a sign-flipped angle. ---
   if (r <= 1e-4f) return (deq >= 0.0f) ? c.delta_max : -c.delta_max;
   // end
-  const float a = atanf(c.L_wb / r);
+  const float a = atanf(car::L_wb / r);
   return (deq >= 0.0f) ? a : -a;
 }
 // end
@@ -68,7 +68,7 @@ inline float deltaIn(const Config& c, float deq) {
 // it never binds, which is why the inner wheel sets the mechanical limit. ---
 inline float deltaOut(const Config& c, float deq) {
   const float R = turnRadius(c, deq);
-  const float a = atanf(c.L_wb / (R + 0.5f * c.t_front));
+  const float a = atanf(car::L_wb / (R + 0.5f * car::t_front));
   return (deq >= 0.0f) ? a : -a;
 }
 // end
@@ -109,9 +109,9 @@ inline float deltaEqMax(const Config& c) {
 
   // Invert deltaIn: lim = atan(L_wb / (R - t_front/2)), so R is
   // L_wb/tan(lim) plus the half track. ---
-  const float r = c.L_wb / tanf(lim) + 0.5f * c.t_front;
+  const float r = car::L_wb / tanf(lim) + 0.5f * car::t_front;
   if (r <= 1e-4f) return 0.0f;
-  return atanf(c.L_wb / r);
+  return atanf(car::L_wb / r);
   // end
 }
 // end

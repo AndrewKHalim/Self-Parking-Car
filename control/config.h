@@ -2,6 +2,12 @@
 
 // Every tunable in one place. A value marked PLACEHOLDER has not been
 // measured yet, and PLAN.md section 13 lists what still has to be measured.
+//
+// The car's own geometry is not in the struct. It has been measured, so it is a
+// constant in the `car` namespace below: the shape of the car is a fact, not a
+// setting. What stays here is everything that changes between runs or between
+// builds, which is the driver, the pack, the servo, the bay and the gains.
+//
 // The bay is made by hand, so its width and depth are not in this file at all:
 // they are measured at run time from the sensors (see supervisor.h).
 
@@ -37,29 +43,49 @@ inline DriveModel driveModel(MotorDriver d) {
 }
 // end
 
+// The car's measured geometry, all in metres, measured on 2026-10-24. These
+// are facts about the chassis and the sensor mounts rather than tuning values,
+// so they are constants. Nothing at run time should be able to change the
+// shape of the car, and a placeholder here would be a mistake rather than a
+// default.
+//
+// L_wb is the wheelbase and t_front the front track. L_car is twice the front
+// overhang measured from the rear axle centre, because the yaw cap uses half
+// of it as the lever from the rotation centre to the body's far corner, and
+// on this chassis the front corner is the far one.
+//
+// d_L and d_R are the side sensors' fore and aft stations from the rear axle
+// centre, left ahead and right behind. The pair measured 24cm apart, split 17cm
+// ahead and 7cm behind, which is longer than the 20cm the design assumed. The
+// heading estimate divides by their sum, so this is the number that sets the
+// heading accuracy, and a longer baseline buys accuracy linearly: this one is
+// 20 percent longer than the design, so every heading reading is 20 percent
+// sharper than the plan predicted.
+//
+// e_out_L and e_out_R are how far the body's widest point sits outboard of
+// each sensor's axis. They turn a gap reading into a body clearance. Both
+// sensors sit well inboard of the shell, so these are large, and a gap reading
+// smaller than them would mean the body is inside the wall. ---
+namespace car {
+constexpr float L_wb    = 0.208779f;
+constexpr float t_front = 0.1847f;
+constexpr float L_car   = 0.468f;
+constexpr float d_L     = 0.17f;
+constexpr float d_R     = 0.07f;
+constexpr float e_out_L = 0.05797f;
+constexpr float e_out_R = 0.05797f;
+}  // namespace car
+// end
+
 struct Config {
-  // Chassis and mounts, all in metres. L_wb is the wheelbase, L_car the car
-  // length and t_front the front track. All three are placeholders. ---
-  float L_wb     = 0.18f;
-  float L_car    = 0.25f;
-  float t_front  = 0.15f;
-  // end
-
-  // Side sensor mounts, in metres. d_L is the left sensor ahead of the rear
-  // axle and d_R the right sensor behind it, so the pair separates heading
-  // from lateral offset. Both of these have been measured. ---
-  float d_L      = 0.10f;
-  float d_R      = 0.10f;
-  // end
-
-  // Side sensor lateral offsets, in metres, and how far each one sits outboard
-  // of the body side. The offsets are positive away from the centreline, and
-  // e_out_L and e_out_R are what turn a gap into a body clearance. All four
-  // are placeholders. ---
+  // Side sensor lateral offsets, in metres, positive away from the centreline.
+  // The controller never reads these: the calibration folds their sum into S0
+  // and their difference into the trim, so a mount error of a couple of
+  // millimetres cannot bias the pose. Nothing has measured them, so they stay
+  // at zero, and they are the one part of the mount geometry that is not a
+  // constant in `car`. ---
   float e_L      = 0.00f;
   float e_R      = 0.00f;
-  float e_out_L  = 0.010f;
-  float e_out_R  = 0.010f;
   // end
 
   // The steering and the drive. Both are switches until the chassis and the

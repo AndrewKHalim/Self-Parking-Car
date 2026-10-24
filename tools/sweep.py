@@ -136,11 +136,15 @@ def main():
     # side sensors lose the wall before the cap matters. This group is here to
     # show what the supervisor does at that boundary: it stops making
     # corrections instead of swinging on a reading it cannot trust. The cap
-    # itself is checked in tools/geom_checks.cpp. ---
+    # itself is checked in tools/geom_checks.cpp.
+    #
+    # The width has to follow the car: the body sits 58mm outboard of each
+    # sensor axis, so the bay has to be wider than 116mm before the car fits at
+    # all, and the cap only binds between about 157mm and 213mm. ---
     narrow = []
     for x0 in (0.02, -0.02):
         for psi0 in (0, 5):
-            for W in (0.068,):
+            for W in (0.180,):
                 for seed in range(1, args.seeds + 1):
                     narrow.append({
                         "x": x0, "psi": psi0, "W": W, "D": 0.60, "v": 0.15,

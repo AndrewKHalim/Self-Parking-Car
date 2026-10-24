@@ -88,6 +88,7 @@ No board needed. The control core has no hardware calls in it, so the same
 code runs on the host.
 
 ```bash
+mkdir -p build
 g++ -std=c++17 -O2 -Wall -Wextra -Icontrol -o build/sim tools/sim_main.cpp -lm
 g++ -std=c++17 -O2 -Wall -Wextra -Icontrol -o build/geom_checks tools/geom_checks.cpp -lm
 
