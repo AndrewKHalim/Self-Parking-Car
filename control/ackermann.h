@@ -4,40 +4,40 @@
 
 #include "config.h"
 
-// Ackermann steering geometry. See PLAN.md section 6.6.
+// Ackermann steering geometry. see PLAN.md section 6.6.
 //
-// The controller works in one angle, the equivalent bicycle-model steer
+// the controller works in one angle, the equivalent bicycle-model steer
 // delta_eq, defined by the turn radius of the rear axle centre:
 //
 //   R = L_wb / tan(delta_eq)
 //
-// That is exact rather than approximate. An Ackermann vehicle's instant centre
+// that is exact rather than approximate. an Ackermann vehicle's instant centre
 // of rotation lies on the rear axle line, necessarily, because the rear wheels
-// are fixed and so cannot slip sideways. This design already references the
-// whole vehicle state to the rear axle centre. The bicycle plant in
+// are fixed and so cannot slip sideways. this design already references the
+// whole vehicle state to the rear axle centre. the bicycle plant in
 // tools/sim_main.cpp is therefore exact for true Ackermann, and this module
-// only decides how that one angle splits across the two front wheels. Had the
+// only decides how that one angle splits across the two front wheels. had the
 // state been referenced to the body centre or the front axle, this would have
 // been a real problem.
 //
-// Two relations carry the geometry, and they are easy to swap. With the inner
+// two relations carry the geometry, and they are easy to swap. with the inner
 // wheel angle d_in and the outer d_out:
 //
 //   Ackermann condition : cot(d_out) - cot(d_in) = t_front / L_wb    a difference
 //   turn radius         : R = L_wb * (cot(d_in) + cot(d_out)) / 2    a sum
 //
-// The inner wheel has the smaller radius, so its cotangent is the smaller
-// one, and the condition has the outer one first. The difference is constant
-// at every lock angle. Only the sum changes with lock. Swapping them returns
-// t_front/L_wb for every input, which reads like a radius but never varies,
-// and nothing else looks wrong. An earlier draft of this design had exactly
-// that bug.
+// the inner wheel has the smaller radius, so its cotangent is the smaller one,
+// and the condition has the outer one first. the difference is constant at
+// every lock angle. only the sum changes with lock. swapping them returns
+// t_front/L_wb for every input, which reads like a radius but never varies, and
+// nothing else looks wrong. an earlier draft of this design had exactly that
+// bug.
 //
-// All angles are signed, positive to the left, matching control.h.
+// all angles are signed, positive to the left, matching control.h.
 
 namespace ack {
 
-// Turn radius of the rear axle centre in metres. It is unbounded going
+// turn radius of the rear axle centre in metres. it is unbounded going
 // straight, so it is capped at a large finite value: callers subtract from it
 // and divide by it, and infinities survive neither. ---
 inline float turnRadius(const Config& /*c*/, float deq) {
@@ -47,16 +47,16 @@ inline float turnRadius(const Config& /*c*/, float deq) {
 }
 // end
 
-// Inner wheel angle in radians. The inner wheel is the one on the side the car
-// turns towards, and it always takes more lock than delta_eq. That extra is
+// inner wheel angle in radians. the inner wheel is the one on the side the car
+// turns towards, and it always takes more lock than delta_eq. that extra is
 // about 1.2 times, which is 5 degrees more at delta_eq = 25 degrees with
 // L_wb = 0.18 and t_front = 0.15. ---
 inline float deltaIn(const Config& c, float deq) {
   const float R = turnRadius(c, deq);
   const float r = R - 0.5f * car::t_front;
-  // A radius of t_front/2 or less is geometrically impossible, because the
-  // turn circle would sit inside the track. It cannot happen while delta_max
-  // is 25 degrees, but clamp rather than return a sign-flipped angle. ---
+  // a radius of t_front/2 or less is geometrically impossible, because the turn
+  // circle would sit inside the track. it cannot happen while delta_max is 25
+  // degrees, but clamp rather than return a sign-flipped angle. ---
   if (r <= 1e-4f) return (deq >= 0.0f) ? c.delta_max : -c.delta_max;
   // end
   const float a = atanf(car::L_wb / r);
@@ -64,8 +64,8 @@ inline float deltaIn(const Config& c, float deq) {
 }
 // end
 
-// Outer wheel angle in radians. It always takes less lock than delta_eq, and
-// it never binds, which is why the inner wheel sets the mechanical limit. ---
+// outer wheel angle in radians. it always takes less lock than delta_eq, and it
+// never binds, which is why the inner wheel sets the mechanical limit. ---
 inline float deltaOut(const Config& c, float deq) {
   const float R = turnRadius(c, deq);
   const float a = atanf(car::L_wb / (R + 0.5f * car::t_front));
@@ -73,14 +73,13 @@ inline float deltaOut(const Config& c, float deq) {
 }
 // end
 
-// The equivalent angle implied by a measured pair of wheel angles. This is the
-// direction a calibration actually runs, since you measure the wheels and
-// infer delta_eq rather than the other way round, so it is the one to reach
-// for.
+// the equivalent angle implied by a measured pair of wheel angles. this is the
+// direction a calibration actually runs: you measure the wheels and infer
+// delta_eq rather than the other way round, so it is the one to reach for.
 //
-// The mean is of cotangents, not of the angles. The angle mean reads 0.09
-// degrees high at the fine stroke amplitude and 0.69 degrees high at full
-// lock, which is 3 percent of tan(delta) and shows up as a turn-radius bias.
+// the mean is of cotangents, not of the angles. the angle mean reads 0.09
+// degrees high at the fine stroke amplitude and 0.69 degrees high at full lock,
+// which is 3 percent of tan(delta) and shows up as a turn-radius bias.
 // ---
 inline float deltaEq(const Config& /*c*/, float din, float dout) {
   const float ci = tanf(din);
@@ -92,22 +91,22 @@ inline float deltaEq(const Config& /*c*/, float din, float dout) {
 }
 // end
 
-// The largest equivalent angle the inner wheel can reach before its own
-// mechanical stop binds. Because the inner wheel needs more lock than the
-// equivalent angle, its stop sets the limit on delta_eq, and the result is
-// well under delta_max.
+// the largest equivalent angle the inner wheel can reach before its own
+// mechanical stop binds. because the inner wheel needs more lock than the
+// equivalent angle, its stop sets the limit on delta_eq, and the result is well
+// under delta_max.
 //
-// This is not wired in yet. control.h still clamps to c.delta_max, which
-// reads as the equivalent angle and is about 5 degrees optimistic. See
-// PLAN.md 6.6 and the open items. Fixing it changes the control output clamp,
-// so it is left for review. ---
+// this is not wired in yet. control.h still clamps to c.delta_max, which reads
+// as the equivalent angle and is about 5 degrees optimistic. see PLAN.md 6.6
+// and the open items. fixing it changes the control output clamp, so it is left
+// for review. ---
 inline float deltaEqMax(const Config& c) {
-  // The wheels reach the command less the deadband (PLAN.md 5.2). ---
+  // the wheels reach the command less the deadband (PLAN.md 5.2). ---
   const float lim = c.delta_max - c.servo_deadband;
   if (lim <= 1e-4f) return 0.0f;
   // end
 
-  // Invert deltaIn: lim = atan(L_wb / (R - t_front/2)), so R is
+  // invert deltaIn: lim = atan(L_wb / (R - t_front/2)), so R is
   // L_wb/tan(lim) plus the half track. ---
   const float r = car::L_wb / tanf(lim) + 0.5f * car::t_front;
   if (r <= 1e-4f) return 0.0f;

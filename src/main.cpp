@@ -1,8 +1,8 @@
 // autoparking-car: ESP32-S3-DevKitC-1 (N16R8) stack verification
-// Proves the full runtime stack compiles and links:
+// proves the full runtime stack compiles and links:
 //   VL53L0X x2 (XSHUT addressing) + ESP32Servo + WiFi + AsyncWebServer
-// This is placeholder firmware. The real control firmware comes after the
-// plan is signed off.
+// this is placeholder firmware. the real control firmware comes after the plan
+// is signed off.
 
 #include <Arduino.h>
 #include <ESP32Servo.h>
@@ -18,7 +18,7 @@ Servo steering;
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
 
-// N16R8 pin map. Octal PSRAM claims GPIO 26 to 32, so those stay clear, along
+// N16R8 pin map. octal PSRAM claims GPIO 26 to 32, so those stay clear, along
 // with the USB pins and the strapping pins sampled at boot. ---
 constexpr int PIN_XSHUT_L = 15;
 constexpr int PIN_XSHUT_R = 16;
@@ -33,7 +33,7 @@ void setup() {
   Wire.begin(8, 9);
   // end
 
-  // XSHUT sequencing. Hold all the sensors low, then enable one at a time and
+  // XSHUT sequencing. hold all the sensors low, then enable one at a time and
   // give it its address. ---
   pinMode(PIN_XSHUT_L, OUTPUT);
   pinMode(PIN_XSHUT_R, OUTPUT);
@@ -53,7 +53,7 @@ void setup() {
   sensorR.setMeasurementTimingBudget(50000);
   // end
 
-  // Continuous mode, so the control loop never blocks on I2C. ---
+  // continuous mode, so the control loop never blocks on I2C. ---
   sensorL.startContinuous(20);
   sensorR.startContinuous(20);
 
@@ -65,7 +65,7 @@ void setup() {
   pinMode(PIN_MOTOR_IN2, OUTPUT);
   // end
 
-  // Join the network and report the address on the serial console. ---
+  // join the network and report the address on the serial console. ---
   WiFi.begin("SSID", "PASSWORD");
   Serial.print("WiFi");
   while (WiFi.status() != WL_CONNECTED) {
@@ -75,7 +75,7 @@ void setup() {
   Serial.printf("\nIP: %s\n", WiFi.localIP().toString().c_str());
   // end
 
-  // Web socket and a plain status page. ---
+  // web socket and a plain status page. ---
   ws.onEvent([](AsyncWebSocket*, AsyncWebSocketClient* client,
                 AwsEventType type, void*, uint8_t*, size_t len) {
     if (type == WS_EVT_CONNECT && len && client->canSend()) {
@@ -93,7 +93,7 @@ void setup() {
 }
 
 void loop() {
-  // Print both sensor readings so the I2C path can be checked by eye. ---
+  // print both sensor readings so the I2C path can be checked by eye. ---
   Serial.printf("L=%dmm R=%dmm\n", sensorL.readRangeContinuousMillimeters(),
                 sensorR.readRangeContinuousMillimeters());
   delay(100);
