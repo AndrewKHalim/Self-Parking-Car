@@ -33,7 +33,7 @@ rear.
 | 15 | VL53L0X left XSHUT |
 | 16 | VL53L0X right XSHUT |
 | 10 | VL53L0X rear XSHUT |
-| 17 | Steering servo signal, 50Hz, 500 to 2400µs |
+| 17 | Steering servo signal, 50Hz, 1000 to 2000µs |
 | 18 | DRV8833 IN1 |
 | 21 | DRV8833 IN2 |
 

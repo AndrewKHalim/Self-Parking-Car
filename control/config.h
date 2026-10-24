@@ -146,9 +146,10 @@ struct Config {
   // fine_threshold the offset below which the fine amplitude is used.
   // psi_cap_min and psi_cap_max bound the peak-yaw cap, psi_meas_max the
   // cone-safe limit on the excursion. servo_deadband is the SG90 dead band of
-  // 10us mapped through the 500-2400us pulse range and 180 degrees, and
+  // 10us mapped through the 1000-2000us angle range and 180 degrees, and
   // servo_rate the no-load 0.10s/60 degree speed at 4.8v in radians per
-  // second. ---
+  // second. the angle range is the datasheet's 1-2ms position table, so a
+  // commanded 90 degrees is 1500us. ---
   float delta_max     = 0.436f;
   float delta_coarse  = 0.436f;
   float delta_fine    = 0.209f;
@@ -156,7 +157,7 @@ struct Config {
   float psi_cap_min   = 0.087f;
   float psi_cap_max   = 0.436f;
   float psi_meas_max  = 0.209f;
-  float servo_deadband = 0.0165f;
+  float servo_deadband = 0.0314f;
   float servo_rate    = 10.472f;
   // end
 

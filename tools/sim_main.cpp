@@ -73,11 +73,10 @@ struct Sim : Hal {
   float faultSideAt = -1.0f;
   // end
 
-  // model parameters. the deadband and the slew rate are the servo's, and the
-  // two accelerations describe the drive. ---
+  // model parameters. the servo deadband and slew rate come from the config,
+  // so the plant and the controller describe the same servo. the two
+  // accelerations describe the drive. ---
   float noise = 0.003f;
-  float deadband = 1.5f * kDeg;
-  float servoRate = 300.0f * kDeg;
   float accel = 0.5f;
   float brakeDecel = 1.0f;
   // end
@@ -102,9 +101,9 @@ struct Sim : Hal {
     // the servo is rate limited and has a deadband. the wheels only move once
     // the command clears the deadband, and then they lag it by that much. ---
     float err = cmdDelta - delta;
-    if (fabsf(err) > deadband) {
-      float mv = err - (err > 0 ? deadband : -deadband);
-      float lim = servoRate * dt;
+    if (fabsf(err) > cfg.servo_deadband) {
+      float mv = err - (err > 0 ? cfg.servo_deadband : -cfg.servo_deadband);
+      float lim = cfg.servo_rate * dt;
       if (fabsf(mv) > lim) mv = (mv > 0 ? lim : -lim);
       delta += mv;
     }
