@@ -72,11 +72,9 @@ curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
 
 The firmware joins the network named in `src/wifi_config.h`: put the SSID and the password there, or leave the placeholders and let it fall back. The join is bounded at 15 s, after which the car brings up its own access point:
 
-| | |
-|---|---|
-| SSID | `autoparking` |
-| password | `autoparking` |
-| page | `http://192.168.4.1/` |
+| SSID| password | page |
+|---|---|---|
+| `autoparking` | `autoparking` | `http://192.168.4.1/` |
 
 The page shows the live state and a chart of the last 300 samples, and the button asks the control task to start a run. It refuses before the calibration and ignores the request while a run is in progress. Telemetry goes to the page over a WebSocket at `/ws`, about ten messages a second.
 
