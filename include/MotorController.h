@@ -55,9 +55,14 @@ public:
         currentDir = MOTOR_STOPPED;
         if (!MOTOR_ENABLED) return;
 
+        analogWrite(PIN_MOTOR_L_IN1, 0);
         digitalWrite(PIN_MOTOR_L_IN1, LOW);
+        analogWrite(PIN_MOTOR_L_IN2, 0);
         digitalWrite(PIN_MOTOR_L_IN2, LOW);
+
+        analogWrite(PIN_MOTOR_R_IN1, 0);
         digitalWrite(PIN_MOTOR_R_IN1, LOW);
+        analogWrite(PIN_MOTOR_R_IN2, 0);
         digitalWrite(PIN_MOTOR_R_IN2, LOW);
     }
 

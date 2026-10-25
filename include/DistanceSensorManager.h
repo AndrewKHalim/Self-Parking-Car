@@ -117,33 +117,30 @@ private:
         float distCm = SENSOR_MAX_VALID_CM;
         isValid = false;
 
-        // RangeStatus:
-        // 0: Valid
-        // 1: Sigma Fail
-        // 2: Signal Fail
-        // 3: Min Range Fail (< 30 mm)
-        // 4: Phase Fail / Out of Range
-        // 5: Hardware Fail
-
-        if (measure.RangeStatus == 3 || (measure.RangeStatus == 0 && measure.RangeMilliMeter < 30)) {
-            // Target is too close to sensor (< 30 mm minimum physical limit)
-            globalProximityAlert = true;
-            distCm = SENSOR_MIN_EFFECTIVE_CM;
-            isValid = true;
-        } else if (measure.RangeStatus == 0) {
+        // In Adafruit VL53L0X:
+        // Status 4: Out of Range / Phase Failure
+        // Status 3: Min Range Fail (< 30 mm)
+        // Status 0 (Valid), 1 (Sigma warning), 2 (Signal warning) contain valid millimeter readings
+        if (measure.RangeStatus != 4) {
             distCm = measure.RangeMilliMeter / 10.0f;
-            if (distCm < SENSOR_EMERGENCY_CM) {
+
+            if (distCm < SENSOR_MIN_EFFECTIVE_CM || measure.RangeStatus == 3) {
+                // Obstacle too close (< 3.0 cm)
+                distCm = SENSOR_MIN_EFFECTIVE_CM;
                 globalProximityAlert = true;
-            }
-            if (distCm <= SENSOR_MAX_VALID_CM) {
+                isValid = true;
+            } else if (distCm <= SENSOR_MAX_VALID_CM) {
+                if (distCm < SENSOR_EMERGENCY_CM) {
+                    globalProximityAlert = true;
+                }
                 isValid = true;
             }
         } else {
-            // RangeStatus != 0
-            // If previous reading was already very close (< 6 cm), an error is likely optical saturation from being under 30 mm
+            // Status 4: Out of range / phase fail
+            // If car was already very close (< 6 cm), phase fail is often optical saturation from being under 30 mm
             if (filteredVal < 6.0f) {
-                globalProximityAlert = true;
                 distCm = SENSOR_MIN_EFFECTIVE_CM;
+                globalProximityAlert = true;
                 isValid = true;
             } else {
                 distCm = SENSOR_MAX_VALID_CM;
@@ -153,10 +150,12 @@ private:
 
         // Apply Exponential Moving Average (EMA) Filter
         if (isValid) {
-            filteredVal = (SENSOR_EMA_ALPHA * distCm) + ((1.0f - SENSOR_EMA_ALPHA) * filteredVal);
-        } else {
-            // Gradually decay back toward MAX_VALID_DIST if invalid
-            filteredVal = (0.1f * SENSOR_MAX_VALID_CM) + (0.9f * filteredVal);
+            // Fast initialization: snap directly to distance on first valid reading
+            if (filteredVal >= (SENSOR_MAX_VALID_CM - 1.0f)) {
+                filteredVal = distCm;
+            } else {
+                filteredVal = (SENSOR_EMA_ALPHA * distCm) + ((1.0f - SENSOR_EMA_ALPHA) * filteredVal);
+            }
         }
 
         return distCm;

@@ -188,13 +188,13 @@ void loop() {
     // --- Termination & Transition Conditions ---
 
     // Condition A: Successfully reached rear target distance (~7.0 cm)
-    if (readings.filteredBackCm <=
-        (TARGET_BACK_WALL_CM + BACK_WALL_TOLERANCE_CM)) {
+    if (readings.filteredBackCm <= (TARGET_BACK_WALL_CM + BACK_WALL_TOLERANCE_CM) ||
+        (readings.backValid && readings.rawBackCm <= (TARGET_BACK_WALL_CM + BACK_WALL_TOLERANCE_CM))) {
       motor.stop();
       steeringServo.write(SERVO_CENTER_DEG);
       setParkingState(STATE_PARKED);
-      Serial.println(
-          "🎉 [SUCCESS] Car parked accurately at 7 cm from rear wall!");
+      Serial.printf("🎉 [SUCCESS] Car parked accurately! Final rear distance: %.1f cm (raw: %.1f cm)\n",
+                    readings.filteredBackCm, readings.rawBackCm);
       break;
     }
 
