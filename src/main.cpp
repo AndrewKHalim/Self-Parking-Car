@@ -1,153 +1,278 @@
-#include <Wire.h>
-#include <Adafruit_VL53L0X.h>
+#include "DistanceSensorManager.h"
+#include "MotorController.h"
+#include "PIDController.h"
+#include "ParkingConfig.h"
+#include <Arduino.h>
 #include <ESP32Servo.h>
-#include <math.h>
+#include <Wire.h>
 
-// Pins
-#define SDA_PIN           8
-#define SCL_PIN           9
-#define XSHUT_LEFT_PIN    4      // Shutdown pin for Left Sensor
-#define XSHUT_RIGHT_PIN   5      // Shutdown pin for Right Sensor
-#define XSHUT_BACK_PIN    6      // Shutdown pin for Back Sensor
-#define SERVO_PIN         13 
-
-// I2C Addresses (Default is 0x29, must reassign during setup)
-#define L0X_LEFT_ADDR     0x30
-#define L0X_RIGHT_ADDR    0x31
-#define L0X_BACK_ADDR     0x32
-
-// Sensor Objects & Servo
-Adafruit_VL53L0X lox_left;
-Adafruit_VL53L0X lox_right;
-Adafruit_VL53L0X lox_back;
+// ============================================================================
+// Global System Instances
+// ============================================================================
+DistanceSensorManager sensorManager;
+PIDController pidController(1.8f, 0.04f, 0.40f); // Default Kp, Ki, Kd
+MotorController motor;
 Servo steeringServo;
 
-// Trigonometric Constants (45 degrees)
-constexpr float SIN_45 = 0.70710678f; // sin(45 deg)
+// ============================================================================
+// Parking System State Machine
+// ============================================================================
+enum ParkingState {
+  STATE_BOOT = 0,
+  STATE_IDLE_READY,
+  STATE_REVERSE_PARKING,
+  STATE_PULL_FORWARD_CORRECT,
+  STATE_PARKED,
+  STATE_EMERGENCY_STOP
+};
 
-// Servo Configuration
-const int SERVO_CENTER = 90;     // Straight steering angle
-const int SERVO_MIN = 45;        // Maximum left turn limit
-const int SERVO_MAX = 135;       // Maximum right turn limit
+ParkingState currentState = STATE_BOOT;
+unsigned long stateStartTime = 0;
+unsigned long lastLoopTime = 0;
+int pullForwardCount = 0;
+constexpr int MAX_PULL_FORWARD_ATTEMPTS = 3;
 
-// Control & Threshold Settings
-const float DEADBAND_CM = 1.5;          // Deadband tolerance (in cm)
-const float MAX_VALID_DIST_CM = 150.0;  // Max distance limit in cm
-
-// PD Steering Parameters
-float Kp = 0.8;
-float Kd = 0.2;
-float previousError = 0.0;
-unsigned long lastTime = 0;
-
-// Helper function to read distance in cm from Adafruit VL53L0X
-float readSensorDistanceCM(Adafruit_VL53L0X &lox) {
-    VL53L0X_RangingMeasurementData_t measure;
-    lox.rangingTest(&measure, false);
-
-    // RangeStatus 4 indicates out-of-range / phase failure
-    if (measure.RangeStatus != 4) {
-        float distCm = measure.RangeMilliMeter / 10.0f;
-        return constrain(distCm, 2.0f, MAX_VALID_DIST_CM);
-    }
-    return MAX_VALID_DIST_CM;
+void setParkingState(ParkingState newState) {
+  currentState = newState;
+  stateStartTime = millis();
 }
 
-// Sequential initialization for multiple I2C sensors using XSHUT pins
-void initVL53L0XSensors() {
-    pinMode(XSHUT_LEFT_PIN, OUTPUT);
-    pinMode(XSHUT_RIGHT_PIN, OUTPUT);
-    pinMode(XSHUT_BACK_PIN, OUTPUT);
-    // Reset both sensors by pulling XSHUT LOW
-    digitalWrite(XSHUT_LEFT_PIN, LOW);
-    digitalWrite(XSHUT_RIGHT_PIN, LOW);
-    digitalWrite(XSHUT_BACK_PIN, LOW);  
-    delay(10);  
-
-    // 1. Initialize Left Sensor
-    digitalWrite(XSHUT_LEFT_PIN, HIGH);
-    delay(10);
-    if (!lox_left.begin(L0X_LEFT_ADDR, false, &Wire)) {
-        Serial.println("ERROR: Left VL53L0X failed to initialize!");
-        while (true) delay(100);
-    }
-
-    // 2. Initialize Right Sensor
-    digitalWrite(XSHUT_RIGHT_PIN, HIGH);
-    delay(10);
-    if (!lox_right.begin(L0X_RIGHT_ADDR, false, &Wire)) {
-        Serial.println("ERROR: Right VL53L0X failed to initialize!");
-        while (true) delay(100);
-    }
-
-    // // 3. Initialize Back Sensor
-    // digitalWrite(XSHUT_BACK_PIN, HIGH);
-    // delay(10);
-    // if (!lox_back.begin(L0X_BACK_ADDR, false, &Wire)) {
-    //     Serial.println("ERROR: Back VL53L0X failed to initialize!");
-    //     while (true) delay(100);
-    // }
-
-    Serial.println("All VL53L0X sensors initialized successfully!");
+const char *getStateName(ParkingState state) {
+  switch (state) {
+  case STATE_BOOT:
+    return "BOOT";
+  case STATE_IDLE_READY:
+    return "IDLE_READY";
+  case STATE_REVERSE_PARKING:
+    return "REVERSE_PARK";
+  case STATE_PULL_FORWARD_CORRECT:
+    return "PULL_FORWARD";
+  case STATE_PARKED:
+    return "PARKED_DONE";
+  case STATE_EMERGENCY_STOP:
+    return "EMERGENCY_STOP";
+  default:
+    return "UNKNOWN";
+  }
 }
 
+// ============================================================================
+// Setup
+// ============================================================================
 void setup() {
-    Serial.begin(115200);
-    while (!Serial) delay(10);
+  Serial.begin(115200);
+  delay(500);
 
-    Serial.println("VL53L0X Self Reverse Parking System Starting...");
+  Serial.println("\n=======================================================");
+  Serial.println("  Autonomous Reverse Parking System with Ackerman PID  ");
+  Serial.println("=======================================================");
 
-    // Initialize I2C Bus
-    Wire.begin(SDA_PIN, SCL_PIN);
+  // 1. Initialize I2C Bus for ESP32-S3
+  Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
+  Wire.setClock(400000); // 400 kHz fast I2C mode
+  Serial.println("✓ I2C initialized on SDA=" + String(PIN_I2C_SDA) +
+                 ", SCL=" + String(PIN_I2C_SCL));
 
-    // Initialize Sensors
-    initVL53L0XSensors();
+  // 2. Attach and Center Steering Servo
+  steeringServo.attach(PIN_SERVO_STEERING);
+  steeringServo.write(SERVO_CENTER_DEG);
+  Serial.println("✓ Steering servo centered at " + String(SERVO_CENTER_DEG) +
+                 "° on pin " + String(PIN_SERVO_STEERING));
 
-    // Attach Steering Servo
-    steeringServo.attach(SERVO_PIN);
-    steeringServo.write(SERVO_CENTER);
-    
-    delay(500);
+  // 3. Initialize Drive Motor
+  motor.begin();
+
+  // 4. Initialize Sensor Array (Sequential XSHUT initialization)
+  Serial.println("Initializing 3x VL53L0X ToF sensor array...");
+  if (!sensorManager.begin()) {
+    Serial.println(
+        "❌ CRITICAL: Sensor initialization failed. Halting system.");
+    while (true) {
+      delay(500);
+    }
+  }
+
+  Serial.println("✓ All sensors online and calibrated.");
+  Serial.println("Entering IDLE_READY. Starting parking in 2 seconds...\n");
+
+  setParkingState(STATE_IDLE_READY);
+  lastLoopTime = millis();
 }
 
+// ============================================================================
+// Main Control Loop
+// ============================================================================
 void loop() {
-    unsigned long currentTime = millis();
-    float deltaTime = (currentTime - lastTime) / 1000.0f; // Time delta in seconds
-    if (deltaTime <= 0.0f) deltaTime = 0.01f;
+  unsigned long now = millis();
+  float deltaTimeSec = (now - lastLoopTime) / 1000.0f;
+  if (deltaTimeSec <= 0.0f)
+    deltaTimeSec = 0.01f;
+  lastLoopTime = now;
 
-    // 1. Read Raw Distances from VL53L0X (converted from mm to cm)
-    float rawLeftCm  = readSensorDistanceCM(lox_left);
-    float rawRightCm = readSensorDistanceCM(lox_right);
+  // 1. Read Distance Sensors (Filtered, Trigonometry-projected,
+  // Proximity-guarded)
+  SensorReadings readings = sensorManager.read();
 
-    // 2. Compute Lateral Distances and Steering Error (cm)
-    float lateralLeft  = rawLeftCm * SIN_45;
-    float lateralRight = rawRightCm * SIN_45;
-    float error = lateralLeft - lateralRight;
+  // 2. Compute Lateral Centering Error
+  // Positive error  -> Closer to right obstacle -> Needs rear to steer left
+  // Negative error  -> Closer to left obstacle  -> Needs rear to steer right
+  float lateralError = 0.0f;
+  bool bothSidesDetected = readings.leftValid && readings.rightValid;
 
-    // 4. Deadband Implementation
-    // If error is within +/- DEADBAND_CM, zero out error to prevent servo jitter
-    if (fabs(error) < DEADBAND_CM) {
-        error = 0.0f;
+  if (bothSidesDetected) {
+    lateralError = readings.lateralLeftCm - readings.lateralRightCm;
+  } else if (readings.leftValid && !readings.rightValid) {
+    // Only left side detected: maintain ~12cm nominal lateral clearance
+    constexpr float NOMINAL_CLEARANCE_CM = 12.0f;
+    lateralError = (NOMINAL_CLEARANCE_CM - readings.lateralLeftCm);
+  } else if (!readings.leftValid && readings.rightValid) {
+    // Only right side detected: maintain ~12cm nominal lateral clearance
+    constexpr float NOMINAL_CLEARANCE_CM = 12.0f;
+    lateralError = (readings.lateralRightCm - NOMINAL_CLEARANCE_CM);
+  } else {
+    // Open area: maintain straight trajectory
+    lateralError = 0.0f;
+  }
+
+  // 3. Finite State Machine
+  int targetServoAngle = SERVO_CENTER_DEG;
+  float leftWheelDeg = 0.0f;
+  float rightWheelDeg = 0.0f;
+
+  switch (currentState) {
+  case STATE_IDLE_READY: {
+    motor.stop();
+    steeringServo.write(SERVO_CENTER_DEG);
+    if (now - stateStartTime > 2000) {
+      Serial.println("🚀 [STATE] Beginning Autonomous Reverse Parking!");
+      pidController.reset();
+      setParkingState(STATE_REVERSE_PARKING);
+    }
+    break;
+  }
+
+  case STATE_REVERSE_PARKING: {
+    // Safety Check: Proximity hazard (< 3.5 cm) on any sensor
+    if (readings.proximityAlert ||
+        readings.filteredBackCm < SENSOR_EMERGENCY_CM) {
+      Serial.println("⚠️ [PROXIMITY ALERT] Obstacle dangerously close! "
+                     "Triggering emergency stop.");
+      motor.stop();
+      setParkingState(STATE_EMERGENCY_STOP);
+      break;
     }
 
-    // 5. PD Steering Controller Calculation
-    float derivative = (error - previousError) / deltaTime;
-    float controlOutput = (Kp * error) + (Kd * derivative);
+    // PID Steering Computation
+    float pidOutput = pidController.compute(lateralError, deltaTimeSec);
+    targetServoAngle =
+        PIDController::mapToServoAngle(pidOutput, STEERING_INVERTED);
+    steeringServo.write(targetServoAngle);
 
-    // 6. Calculate Target Servo Angle (Reverse Ackerman Steering)
-    int rawAngle = SERVO_CENTER + (int)controlOutput;
-    int targetAngle = constrain(rawAngle, SERVO_MIN, SERVO_MAX);
+    // Compute actual Ackerman inner/outer road wheel angles
+    PIDController::getAckermanWheelAngles(targetServoAngle, leftWheelDeg,
+                                          rightWheelDeg);
 
-    // Output to Servo
-    steeringServo.write(targetAngle);
+    // Speed Control: Speed modulation based on rear distance
+    if (readings.filteredBackCm <= APPROACH_SLOW_DIST_CM) {
+      // Precision crawl speed as we near the rear wall
+      motor.reverse(SPEED_REVERSE_CRAWL);
+    } else {
+      // Standard reverse cruising speed
+      motor.reverse(SPEED_REVERSE_CRUISE);
+    }
 
-    // Update State Tracker
-    previousError = error;
-    lastTime = currentTime;
+    // --- Termination & Transition Conditions ---
 
-    // Telemetry Logging
-    Serial.printf("Raw L: %.1f cm | Raw R: %.1f cm || Lat L: %.1f cm | Lat R: %.1f cm || Err: %.1f | Servo: %d deg\n", 
-                  rawLeftCm, rawRightCm, lateralLeft, lateralRight, error, targetAngle);
+    // Condition A: Successfully reached rear target distance (~7.0 cm)
+    if (readings.filteredBackCm <=
+        (TARGET_BACK_WALL_CM + BACK_WALL_TOLERANCE_CM)) {
+      motor.stop();
+      steeringServo.write(SERVO_CENTER_DEG);
+      setParkingState(STATE_PARKED);
+      Serial.println(
+          "🎉 [SUCCESS] Car parked accurately at 7 cm from rear wall!");
+      break;
+    }
 
-    delay(40); // Loop execution rate (~25 Hz)
+    // Condition B: Approaching rear wall but lateral alignment is poor -> Pull
+    // forward to adjust
+    if (readings.filteredBackCm < PULL_FORWARD_THRESH_CM &&
+        fabs(lateralError) > ALIGNMENT_TOLERANCE_CM &&
+        pullForwardCount < MAX_PULL_FORWARD_ATTEMPTS) {
+
+      Serial.printf("🔄 [ALIGNMENT] Close to back wall (%.1f cm) with error "
+                    "%.1f cm. Pulling forward to adjust (Attempt %d/%d)...\n",
+                    readings.filteredBackCm, lateralError, pullForwardCount + 1,
+                    MAX_PULL_FORWARD_ATTEMPTS);
+      motor.stop();
+      pullForwardCount++;
+      setParkingState(STATE_PULL_FORWARD_CORRECT);
+      break;
+    }
+    break;
+  }
+
+  case STATE_PULL_FORWARD_CORRECT: {
+    // Steer gently opposite to error to square up the car while moving forward
+    float counterSteer = (lateralError > 0) ? -25.0f : 25.0f;
+    targetServoAngle =
+        PIDController::mapToServoAngle(counterSteer, STEERING_INVERTED);
+    steeringServo.write(targetServoAngle);
+    PIDController::getAckermanWheelAngles(targetServoAngle, leftWheelDeg,
+                                          rightWheelDeg);
+
+    motor.forward(SPEED_FORWARD_ADJUST);
+
+    // Pull forward for preset duration or until rear clearance reaches safe
+    // distance (> 22 cm)
+    if (now - stateStartTime >= PULL_FWD_DURATION_MS ||
+        readings.filteredBackCm > 22.0f) {
+      motor.stop();
+      steeringServo.write(SERVO_CENTER_DEG);
+      pidController.reset();
+      delay(150); // Pause briefly before switching gear
+      setParkingState(STATE_REVERSE_PARKING);
+      Serial.println("↩ Resuming reverse parking with centered alignment.");
+    }
+    break;
+  }
+
+  case STATE_PARKED: {
+    motor.stop();
+    steeringServo.write(SERVO_CENTER_DEG);
+    targetServoAngle = SERVO_CENTER_DEG;
+    leftWheelDeg = 0.0f;
+    rightWheelDeg = 0.0f;
+    break;
+  }
+
+  case STATE_EMERGENCY_STOP: {
+    motor.stop();
+    steeringServo.write(SERVO_CENTER_DEG);
+    // If obstacle moves away or cleared, allow recovery
+    if (!readings.proximityAlert && readings.filteredBackCm > 8.0f) {
+      Serial.println("Obstacle cleared. Resuming reverse parking.");
+      setParkingState(STATE_REVERSE_PARKING);
+    }
+    break;
+  }
+
+  default:
+    break;
+  }
+
+  // 4. Telemetry Output (Structured serial logging at ~10 Hz)
+  static unsigned long lastLogTime = 0;
+  if (now - lastLogTime >= 100) {
+    lastLogTime = now;
+    Serial.printf(
+        "[%s] Back: %5.1f cm | LatL: %5.1f cm | LatR: %5.1f cm | Err: %+5.1f "
+        "cm | Servo: %3d° | Whl(L/R): %+4.1f°/%+4.1f° | Mot: %s(%d)\n",
+        getStateName(currentState), readings.filteredBackCm,
+        readings.lateralLeftCm, readings.lateralRightCm, lateralError,
+        targetServoAngle, leftWheelDeg, rightWheelDeg,
+        motor.getDirectionString(), motor.getSpeed());
+  }
+
+  delay(25); // Loop cadence (~30-40 Hz)
 }
