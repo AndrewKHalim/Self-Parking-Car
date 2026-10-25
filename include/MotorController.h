@@ -1,4 +1,3 @@
-
 #pragma once
 #include <Arduino.h>
 #include "ParkingConfig.h"
@@ -19,13 +18,14 @@ public:
             return;
         }
 
-        pinMode(PIN_MOTOR_PWM, OUTPUT);
-        pinMode(PIN_MOTOR_DIR1, OUTPUT);
-        pinMode(PIN_MOTOR_DIR2, OUTPUT);
+        pinMode(PIN_MOTOR_L_IN1, OUTPUT);
+        pinMode(PIN_MOTOR_L_IN2, OUTPUT);
+        pinMode(PIN_MOTOR_R_IN1, OUTPUT);
+        pinMode(PIN_MOTOR_R_IN2, OUTPUT);
 
         stop();
-        Serial.println("✓ Motor controller initialized on pins PWM=" + String(PIN_MOTOR_PWM) + 
-                       ", DIR1=" + String(PIN_MOTOR_DIR1) + ", DIR2=" + String(PIN_MOTOR_DIR2));
+        Serial.printf("✓ Dual L298N motors initialized: Left(IN1=%d, IN2=%d), Right(IN3=%d, IN4=%d)\n",
+                      PIN_MOTOR_L_IN1, PIN_MOTOR_L_IN2, PIN_MOTOR_R_IN1, PIN_MOTOR_R_IN2);
     }
 
     void reverse(uint8_t speed) {
@@ -33,9 +33,10 @@ public:
         currentDir = MOTOR_REVERSE;
         if (!MOTOR_ENABLED) return;
 
-        digitalWrite(PIN_MOTOR_DIR1, LOW);
-        digitalWrite(PIN_MOTOR_DIR2, HIGH);
-        analogWrite(PIN_MOTOR_PWM, speed);
+        // Drive Left Motor Reverse
+        setMotorOutput(PIN_MOTOR_L_IN1, PIN_MOTOR_L_IN2, speed, true, INVERT_LEFT_MOTOR);
+        // Drive Right Motor Reverse
+        setMotorOutput(PIN_MOTOR_R_IN1, PIN_MOTOR_R_IN2, speed, true, INVERT_RIGHT_MOTOR);
     }
 
     void forward(uint8_t speed) {
@@ -43,9 +44,10 @@ public:
         currentDir = MOTOR_FORWARD;
         if (!MOTOR_ENABLED) return;
 
-        digitalWrite(PIN_MOTOR_DIR1, HIGH);
-        digitalWrite(PIN_MOTOR_DIR2, LOW);
-        analogWrite(PIN_MOTOR_PWM, speed);
+        // Drive Left Motor Forward
+        setMotorOutput(PIN_MOTOR_L_IN1, PIN_MOTOR_L_IN2, speed, false, INVERT_LEFT_MOTOR);
+        // Drive Right Motor Forward
+        setMotorOutput(PIN_MOTOR_R_IN1, PIN_MOTOR_R_IN2, speed, false, INVERT_RIGHT_MOTOR);
     }
 
     void stop() {
@@ -53,9 +55,10 @@ public:
         currentDir = MOTOR_STOPPED;
         if (!MOTOR_ENABLED) return;
 
-        digitalWrite(PIN_MOTOR_DIR1, LOW);
-        digitalWrite(PIN_MOTOR_DIR2, LOW);
-        analogWrite(PIN_MOTOR_PWM, 0);
+        digitalWrite(PIN_MOTOR_L_IN1, LOW);
+        digitalWrite(PIN_MOTOR_L_IN2, LOW);
+        digitalWrite(PIN_MOTOR_R_IN1, LOW);
+        digitalWrite(PIN_MOTOR_R_IN2, LOW);
     }
 
     MotorDirection getDirection() const { return currentDir; }
@@ -72,4 +75,20 @@ public:
 private:
     uint8_t currentSpeed;
     MotorDirection currentDir;
+
+    // Direct PWM on IN pins (for L298N with ENA/ENB jumpers to 5V)
+    void setMotorOutput(uint8_t pin1, uint8_t pin2, uint8_t speed, bool isReverse, bool invert) {
+        bool forwardDirection = !isReverse;
+        if (invert) {
+            forwardDirection = !forwardDirection;
+        }
+
+        if (forwardDirection) {
+            analogWrite(pin1, speed);
+            digitalWrite(pin2, LOW);
+        } else {
+            digitalWrite(pin1, LOW);
+            analogWrite(pin2, speed);
+        }
+    }
 };

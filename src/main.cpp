@@ -61,7 +61,11 @@ const char *getStateName(ParkingState state) {
 // ============================================================================
 void setup() {
   Serial.begin(115200);
-  delay(500);
+  unsigned long startWait = millis();
+  while (!Serial && (millis() - startWait < 3000)) {
+    delay(10);
+  }
+  delay(300);
 
   Serial.println("\n=======================================================");
   Serial.println("  Autonomous Reverse Parking System with Ackerman PID  ");

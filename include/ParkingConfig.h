@@ -8,19 +8,25 @@ constexpr uint8_t PIN_I2C_SDA          = 8;
 constexpr uint8_t PIN_I2C_SCL          = 9;
 
 // VL53L0X XSHUT Pins (Sequential power-on assignment)
-constexpr uint8_t PIN_XSHUT_LEFT       = 4;   // Left 45° ToF Sensor
-constexpr uint8_t PIN_XSHUT_RIGHT      = 5;   // Right 45° ToF Sensor
-constexpr uint8_t PIN_XSHUT_BACK       = 6;   // Back Center 0° ToF Sensor
+constexpr uint8_t PIN_XSHUT_LEFT       = 6;   // Left 45° ToF Sensor
+constexpr uint8_t PIN_XSHUT_BACK       = 5;   // Back Center 0° ToF Sensor
+constexpr uint8_t PIN_XSHUT_RIGHT      = 4;   // Right 45° ToF Sensor
 
 // Actuator Pins
-constexpr uint8_t PIN_SERVO_STEERING   = 13;  // Steering Servo
+constexpr uint8_t PIN_SERVO_STEERING   = 7;   // Steering Servo
 
-// Drive Motor Driver Pins (Configurable for H-Bridge: PWM + DIR1 + DIR2)
-// Set MOTOR_ENABLED to false if motor is controlled externally or manually
+// Dual Rear Drive Motors (L298N with ENA/ENB jumpers installed)
 constexpr bool    MOTOR_ENABLED        = true;
-constexpr uint8_t PIN_MOTOR_PWM        = 10;  // PWM speed control (LEDC channel on ESP32)
-constexpr uint8_t PIN_MOTOR_DIR1       = 11;  // Motor Direction IN1
-constexpr uint8_t PIN_MOTOR_DIR2       = 12;  // Motor Direction IN2
+// Left Motor Pins (L298N IN1, IN2)
+constexpr uint8_t PIN_MOTOR_L_IN1      = 16;
+constexpr uint8_t PIN_MOTOR_L_IN2      = 17;
+// Right Motor Pins (L298N IN3, IN4)
+constexpr uint8_t PIN_MOTOR_R_IN1      = 14;
+constexpr uint8_t PIN_MOTOR_R_IN2      = 13;
+
+// Motor Polarity (toggle to true if a motor spins backwards)
+constexpr bool    INVERT_LEFT_MOTOR    = true;  // Inverted so reverse drives backward
+constexpr bool    INVERT_RIGHT_MOTOR   = false;
 
 // ============================================================================
 // I2C Sensor Addresses
