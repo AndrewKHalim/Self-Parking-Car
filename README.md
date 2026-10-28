@@ -22,14 +22,16 @@ The three sensors are addressed over one I2C bus. Each one is enabled in turn th
 
 | GPIO | function |
 |---|---|
+| 4 | DRV8833 IN3 (right motor) |
+| 5 | DRV8833 IN4 (right motor) |
 | 8 | I2C SDA |
 | 9 | I2C SCL |
 | 15 | VL53L0X left XSHUT |
 | 16 | VL53L0X right XSHUT |
 | 10 | VL53L0X rear XSHUT |
 | 17 | steering servo signal, 50Hz, 1000 to 2000µs |
-| 18 | DRV8833 IN1 |
-| 21 | DRV8833 IN2 |
+| 18 | DRV8833 IN1 (left motor) |
+| 21 | DRV8833 IN2 (left motor) |
 
 Leave GPIO 26 to 32 alone: the octal PSRAM claims them. GPIO 19 and 20 are the USB pins, and GPIO 0, 3, 45 and 46 are strapping pins that are sampled at boot.
 
@@ -76,7 +78,7 @@ The firmware joins the network named in `src/wifi_config.h`: put the SSID and th
 |---|---|---|
 | `autoparking` | `autoparking` | `http://192.168.4.1/` |
 
-The page shows the live state and a chart of the last 300 samples, and the button asks the control task to start a run. It refuses before the calibration and ignores the request while a run is in progress. Telemetry goes to the page over a WebSocket at `/ws`, about ten messages a second.
+The page shows the live state and a chart of the last 1200 samples, and the button asks the control task to start a run. It refuses before the calibration and ignores the request while a run is in progress. The chart carries three labelled series against time in seconds, x in mm, psi in degrees and the servo in degrees, each on a fixed axis. The page seeds itself from `/log.csv` on load and on every reconnect, so a reload does not lose the run, and the board holds 34 s of it. Telemetry goes to the page over a WebSocket at `/ws`, about ten messages a second.
 
 ### 4. The host simulator
 
@@ -161,6 +163,7 @@ The SVG versions of the figures sit beside the PNGs. The longer note, with the p
 | `src/main.cpp` | the runtime: the two FreeRTOS tasks and the handoff between them |
 | `src/esp32_hal.h` | the ESP32 `Hal`: three VL53L0X on one bus, the servo and the DRV8833 |
 | `src/dashboard_html.h` | the page, as one PROGMEM string |
+| `src/telemetry_ring.h` | the 1024-record spinlocked run log |
 | `src/wifi_config.h` | the SSID, the password, the fallback access point and the hostname |
 
 The core map:
@@ -179,10 +182,13 @@ The endpoints:
 | `/` | GET | the page |
 | `/ws` | WebSocket | telemetry, one JSON object per message |
 | `/start` | GET | sets the start request |
+| `/log.csv` | GET | the held run as fixed-width CSV, `text/csv` attachment |
 
 The page is reachable on the configured network, or over the `autoparking` access point at `192.168.4.1`. The SSID, the password and the fallback are in `src/wifi_config.h`.
 
 Telemetry crosses from the control task to the web task through a one-deep queue written with `xQueueOverwrite`, so a slow socket can never hold up the control loop: the web task either gets the newest tick or nothing at all. The JSON carries the numeric fields as integers, t in ms, distances in mm, angles in milliradians and the servo in whole degrees. Phase and stroke are strings. The web task drains the queue every 100 ms and sends, which is 10 Hz. The start request crosses the other way as a `std::atomic<bool>`, set by `/start` and cleared by the control task, which still refuses it before the calibration and ignores it mid-run.
+
+The control task also prints one line at 10 Hz while it runs, every third tick: the phase and the stroke, then x, psi, rear, gL and gR, the servo command, cal, ok and the stroke count. So a bench check does not need a phone joined to the access point.
 
 This is compile-verified, not hardware-verified. The firmware builds and links for the target, but no board has run it, so no sensor has been read, the servo has never moved, the network join is untested and the page has not been opened on a phone.
 
@@ -264,6 +270,7 @@ Two things are switches rather than facts, because neither has been measured yet
 | `src/main.cpp` | the firmware runtime: the control task on core 1, the web task on core 0, and the handoff between them |
 | `src/esp32_hal.h` | the ESP32 `Hal`: three VL53L0X on one bus, the servo and the DRV8833 |
 | `src/dashboard_html.h` | the dashboard, as one PROGMEM string |
+| `src/telemetry_ring.h` | the 1024-record spinlocked run log behind `/log.csv` |
 | `src/wifi_config.h` | the SSID, the password and the fallback access point, in one place |
 | `src/control_build.cpp` | builds the control core with no hardware attached, as a compile check |
 | `lib/Network/` | the committed `Network` source, with the manifest that makes PlatformIO build it |
@@ -272,4 +279,4 @@ The control core has no hardware calls in it, so the same code runs against the 
 
 ## Status
 
-The firmware builds and links for the N16R8 at RAM 14.7 percent and Flash 15.6 percent of the 6,553,600 byte app partition (1,024,170 bytes). The control core, the HAL adapter and the dashboard are written and compile for the target, and the host simulator builds with them. The board has never been flashed: no sensor reading, servo position or WiFi join has been verified on real hardware. The maneuver itself remains unproven until the car runs, and the step response above is simulated.
+The firmware builds and links for the N16R8 at RAM 24.8 percent (81,300 of 327,680 bytes) and Flash 16.1 percent of the 6,553,600 byte app partition (1,056,926 bytes). The control core, the HAL adapter and the dashboard are written and compile for the target, and the host simulator builds with them. The board has never been flashed: no sensor reading, servo position or WiFi join has been verified on real hardware. The maneuver itself remains unproven until the car runs, and the step response above is simulated.
