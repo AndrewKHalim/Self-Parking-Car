@@ -1,6 +1,6 @@
 #pragma once
 
-// Every tunable in one place. PLAN.md section 13 lists what is left to measure. The car's measured geometry is a fact, so it lives in the car namespace.
+// Every tunable in one place. PLAN.md section 13 lists what is left to measure. The chassis geometry is a fact of the car, so it lives in the car namespace.
 
 // How the front wheels are steered. An Ackermann inner wheel reaches its stop first, where PARALLEL holds both at one angle.
 enum class SteerModel {
@@ -25,15 +25,24 @@ inline DriveModel driveModel(MotorDriver d) {
   return DriveModel{0.5f, 1.0f};
 }
 
-// Measured 2026-10-24, in metres. d_L and d_R are 17cm ahead and 7cm behind, a 24cm baseline where the design assumed 20, so headings read 20 percent sharper. e_out_L and e_out_R turn a gap reading into a body clearance.
+// Chassis dimensions in metres, 2026-10-29. L_car and L_wb are given for this
+// project. t_front is the kingpin bore spacing in Base.step, 90.5 mm, and not a
+// tyre centre, because no wheels are modelled there. The body is 119.5 mm wide
+// at the two rear pods only, so that is where a flush sensor face can sit.
+// d_L and d_R are still the plan's 60 mm stations, a placeholder until the
+// mounts exist, and their sum is the baseline the heading estimate divides by.
+// d_R is the magnitude behind the rear axle, not a signed station, because
+// geom::pose adds the two and a signed pair would zero the denominator.
+// e_out is 0 while each sensor face is meant to be flush with the widest point.
+// L_wb and t_front are axle and bore centres, not body dimensions.
 namespace car {
-constexpr float L_wb    = 0.208779f;
-constexpr float t_front = 0.1847f;
-constexpr float L_car   = 0.468f;
-constexpr float d_L     = 0.17f;
-constexpr float d_R     = 0.07f;
-constexpr float e_out_L = 0.05797f;
-constexpr float e_out_R = 0.05797f;
+constexpr float L_wb    = 0.183f;
+constexpr float t_front = 0.0905f;
+constexpr float L_car   = 0.234f;
+constexpr float d_L     = 0.060f;
+constexpr float d_R     = 0.060f;
+constexpr float e_out_L = 0.000f;
+constexpr float e_out_R = 0.000f;
 }
 
 struct Config {
@@ -41,8 +50,10 @@ struct Config {
   float e_L      = 0.00f;
   float e_R      = 0.00f;
 
-  // Switches until the chassis and the driver are measured, and a placeholder pack voltage.
-  SteerModel steer_model = SteerModel::PARALLEL;
+  // The chassis carries the printed rack, pinion and two horns, so the front
+  // wheels are not parallel. motor_driver is the board being fitted. motor_supply
+  // is provisional, replaced by the pack voltage under load at V0.
+  SteerModel steer_model = SteerModel::ACKERMANN;
   MotorDriver motor_driver = MotorDriver::DRV8833;
   float motor_supply = 7.4f;
 
@@ -53,6 +64,8 @@ struct Config {
   float S0        = 0.0f;
   float trim      = 0.0f;
   int   calib_samples = 32;
+  // Provisional, this tree's figure for the 468 mm car, and replaced by a timed
+  // 20 cm reverse at the chosen reverse duty.
   float speed     = 0.15f;
   float d_stop    = 0.020f;
 
@@ -72,7 +85,7 @@ struct Config {
   float back_in_max_travel = 2.5f;
   int   stroke_invalid_ticks = 2;
 
-  // Steering in radians. Mechanical limit, stroke amplitudes, yaw caps, and the SG90 10us dead band and 0.10s/60deg speed at 4.8v.
+  // Steering in radians. Mechanical limit, stroke amplitudes, yaw caps, and the SG90 10us dead band and 0.10s/60deg speed at 4.8v. delta_max is provisional until a protractor at commanded 45 and 135 degrees.
   float delta_max     = 0.436f;
   float delta_coarse  = 0.436f;
   float delta_fine    = 0.209f;
