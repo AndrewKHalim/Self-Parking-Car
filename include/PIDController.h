@@ -5,6 +5,10 @@
 
 class PIDController {
 public:
+    struct PIDTerms {
+        float p, i, d, out;
+    };
+
     PIDController(float p = 1.6f, float i = 0.05f, float d = 0.45f)
         : Kp(p), Ki(i), Kd(d),
           integral(0.0f), previousError(0.0f),
@@ -23,6 +27,9 @@ public:
         previousError = 0.0f;
         filteredDerivative = 0.0f;
     }
+
+    // Last terms from compute(), for logging only.
+    const PIDTerms &terms() const { return last; }
 
     // Computes control output in degrees offset from center [-45, +45]
     float compute(float error, float deltaTimeSec) {
@@ -53,6 +60,11 @@ public:
         float dTerm = Kd * filteredDerivative;
 
         previousError = error;
+
+        last.p = pTerm;
+        last.i = iTerm;
+        last.d = dTerm;
+        last.out = pTerm + iTerm + dTerm;
 
         // Total control output (degrees offset)
         return pTerm + iTerm + dTerm;
@@ -94,4 +106,5 @@ private:
     float filteredDerivative;
     float maxIntegral;
     float derivativeFilterAlpha;
+    PIDTerms last = {0.0f, 0.0f, 0.0f, 0.0f};
 };
