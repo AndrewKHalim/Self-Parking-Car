@@ -161,6 +161,18 @@ static void controlTask(void* arg) {
 
     sup.update();
     runLog.record(sup.tel);
+
+    // 10 Hz, every third 30 Hz tick, so a run reads on the serial line with no browser open. Units are spelled into the field names because a screenshot has no caption.
+    static uint32_t tick = 0;
+    if (++tick % 3 == 0) {
+      Serial.printf("%7.2fs %-9s %-9s x=%+6.1f psi=%+6.1f rear=%6.1f gL=%6.1f gR=%6.1f servo=%5.1f cal=%d ok=%d strokes=%d\n",
+                    sup.tel.t, phaseName(sup.tel.phase), strokeName(sup.tel.stroke),
+                    sup.tel.x * 1000.0f, sup.tel.psi * 57.2958f,
+                    sup.tel.rear * 1000.0f, sup.tel.gL * 1000.0f,
+                    sup.tel.gR * 1000.0f, sup.tel.servo,
+                    (int)sup.tel.calibrated, (int)sup.tel.valid, sup.tel.strokes);
+    }
+
     xQueueOverwrite(telemetryQueue, &sup.tel);
     vTaskDelayUntil(&last, pdMS_TO_TICKS(CONTROL_PERIOD_MS));
   }
