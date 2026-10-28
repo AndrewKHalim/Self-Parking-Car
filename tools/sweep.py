@@ -135,13 +135,16 @@ def main():
     # the clearance interlock cannot bind in a parking scenario, because a bay
     # narrow enough to bind it is narrower than the car, and in such a bay the
     # side sensors lose the wall before the cap matters. this group shows what
-    # the supervisor does at that boundary: it stops making corrections instead
+    # the supervisor does at that boundary. it stops making corrections instead
     # of swinging on a reading it cannot trust. the cap itself is checked in
     # tools/geom_checks.cpp.
     #
-    # the width has to follow the car: the body sits 58mm outboard of each
-    # sensor axis, so the bay has to be wider than 116mm before the car fits at
-    # all, and the cap only binds between about 157mm and 213mm. ---
+    # the width follows the car. the body is 119.5mm wide at the rear pods and
+    # the side sensor faces sit flush with that, so the car needs a bay wider
+    # than 119.5mm before it fits at all. the cap binds between 0.5 x 0.234 x
+    # sin(0.087) = 10.2mm and 0.5 x 0.234 x sin(0.436) = 49.4mm of clearance,
+    # which is a bay of 140 to 218mm. the 180mm bay leaves 30.25mm a side,
+    # inside the band.
     narrow = []
     for x0 in (0.02, -0.02):
         for psi0 in (0, 5):
@@ -151,12 +154,31 @@ def main():
                         "x": x0, "psi": psi0, "W": W, "D": 0.60, "v": 0.15,
                         "noise": 0.003, "seed": seed,
                     })
-    # end
+
+    # step 6 builds a 300 x 450mm bay. the main grid stays as it is, because
+    # adding a width and a depth there would change the baseline denominator.
+    # this group carries the same spreads as the main grid and changes only the
+    # bay, so its number reads against the baseline.
+    #
+    # at 300mm the clearance is 90.25mm a side, well above the 49.4mm where
+    # the cap stops binding, so the cap is not what this group tests. it shows
+    # whether the tighter depth costs success that the wider grid keeps.
+    small = []
+    for x0 in (0.02, 0.04, 0.06, -0.02, -0.04, -0.06):
+        for psi0 in (0, 5, -5, 10, -10):
+            for v in (0.10, 0.15, 0.20):
+                for noise in (0.003, 0.006):
+                    for seed in range(1, args.seeds + 1):
+                        small.append({
+                            "x": x0, "psi": psi0, "W": 0.30, "D": 0.45,
+                            "v": v, "noise": noise, "seed": seed,
+                        })
 
     ncal = sum(len(v) for v in cal_jobs.values())
-    print(f"running {len(jobs) + len(narrow) + ncal} scenarios")
+    print(f"running {len(jobs) + len(narrow) + len(small) + ncal} scenarios")
     rows = run_batch(jobs)
     narrow_rows = run_batch(narrow)
+    small_rows = run_batch(small)
     cal_rows = {}
     for calPsi, jb in cal_jobs.items():
         cal_rows[calPsi] = run_batch(jb)
@@ -165,13 +187,22 @@ def main():
     with open(args.out, "w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=COLUMNS)
         writer.writeheader()
-        for row in rows + narrow_rows + [r for v in cal_rows.values() for r in v]:
+        for row in (rows + narrow_rows + small_rows
+                    + [r for v in cal_rows.values() for r in v]):
             writer.writerow({k: row.get(k, "") for k in COLUMNS})
     print(f"wrote {args.out}")
 
     summarise(rows, "overall")
     print()
     summarise(narrow_rows, "narrow bay (clearance interlock)")
+    print()
+    summarise(small_rows, "300 x 450 bay")
+    print()
+    small_noise = {}
+    for row in small_rows:
+        small_noise.setdefault(row["noise"], []).append(row)
+    for value in sorted(small_noise, key=float):
+        summarise(small_noise[value], f"300 x 450 bay, noise = {value}")
     print()
     for value in sorted(cal_rows, key=float):
         summarise(cal_rows[value], f"calibration squaring error = {value} deg")
