@@ -21,6 +21,8 @@ struct Telemetry {
   float x = 0;
   float psi = 0;
   float rear = 0;
+  float gL = 0;
+  float gR = 0;
   float servo = 90;
   float psiCap = 0;
   float clearance = 0;
@@ -237,6 +239,8 @@ struct Supervisor {
     tel.x = p.x;
     tel.psi = p.psi;
     tel.rear = gRear;
+    tel.gL = gL;
+    tel.gR = gR;
     tel.servo = servoDeg;
     tel.psiCap = psiCap;
     tel.clearance = clear;

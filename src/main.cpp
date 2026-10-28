@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 
 #include <ESPAsyncWebServer.h>
 #include <freertos/FreeRTOS.h>
@@ -15,6 +16,7 @@
 #include "dashboard_html.h"
 #include "esp32_hal.h"
 #include "supervisor.h"
+#include "telemetry_ring.h"
 #include "wifi_config.h"
 
 // 30 Hz, which is what Config::dt says. The control law measures its own dt, but the stroke profiles assume a tick.
@@ -46,6 +48,9 @@ static AsyncWebServer server(80);
 static AsyncWebSocket socket("/ws");
 static Esp32Hal hal;
 
+// The run, kept on the board so a reload or a dropped socket does not lose it. The control task writes one record per tick and the web side reads it behind the ring's lock.
+static TelemetryRing runLog;
+
 static const char* phaseName(Phase p) {
   switch (p) {
     case Phase::IDLE: return "idle";
@@ -66,16 +71,16 @@ static const char* strokeName(Stroke s) {
   return "unknown";
 }
 
-// One JSON object per message, numeric fields as integers. t is ms, x, rear, travel, clearance are mm, psi, cap, peak are milliradians, servo degrees.
-static void publishTelemetry(const Telemetry& t) {
+// One JSON object per message, numeric fields as integers. t is ms, x, rear, travel, clearance, gL and gR are mm, psi, cap, peak are milliradians, servo degrees. seq is the ring record this sample came from, so the page can line it up with the CSV.
+static void publishTelemetry(const Telemetry& t, uint32_t seq) {
   if (socket.count() == 0) return;
 
-  static char line[320];
+  static char line[384];
   snprintf(line, sizeof(line),
            "{\"t\":%lu,\"x\":%ld,\"psi\":%ld,\"rear\":%ld,\"servo\":%d,"
            "\"phase\":\"%s\",\"stroke\":\"%s\",\"strokes\":%d,"
            "\"cal\":%d,\"valid\":%d,\"travel\":%ld,\"cap\":%ld,"
-           "\"clear\":%ld,\"peak\":%ld,"
+           "\"clear\":%ld,\"peak\":%ld,\"gL\":%ld,\"gR\":%ld,\"seq\":%lu,"
            "\"rearFault\":%d,\"travelFault\":%d,\"outOfSpec\":%d}",
            (unsigned long)(t.t * 1000.0f),
            (long)lroundf(t.x * 1000.0f),
@@ -88,8 +93,47 @@ static void publishTelemetry(const Telemetry& t) {
            (long)lroundf(t.psiCap * 1000.0f),
            (long)lroundf(t.clearance * 1000.0f),
            (long)lroundf(t.peakYaw * 1000.0f),
+           (long)lroundf(t.gL * 1000.0f),
+           (long)lroundf(t.gR * 1000.0f),
+           (unsigned long)seq,
            (int)t.rearFault, (int)t.travelFault, (int)t.outOfSpec);
   socket.textAll(line);
+}
+
+// Slices the held run into fixed-width rows from the request offset, so the response is never buffered whole. first and total come from one snapshot taken when the request started.
+static size_t csvChunk(uint32_t first, uint32_t total, uint8_t* buffer,
+                       size_t maxLen, size_t index) {
+  const size_t rows = (total < first) ? 0 : (size_t)(total - first + 1);
+  const size_t end = CSV_HEADER_LEN + rows * CSV_ROW_LEN;
+  size_t n = 0;
+
+  while (n < maxLen && index < end) {
+    if (index < CSV_HEADER_LEN) {
+      size_t take = CSV_HEADER_LEN - index;
+      if (take > maxLen - n) take = maxLen - n;
+      memcpy(buffer + n, CSV_HEADER + index, take);
+      n += take;
+      index += take;
+      continue;
+    }
+
+    const size_t offset = index - CSV_HEADER_LEN;
+    const uint32_t seq = first + (uint32_t)(offset / CSV_ROW_LEN);
+    const size_t col = offset % CSV_ROW_LEN;
+
+    Sample s;
+    if (!runLog.get(seq, s)) break;
+
+    char row[CSV_ROW_LEN + 1];
+    TelemetryRing::csvRow(seq, s, row, sizeof(row));
+    size_t take = CSV_ROW_LEN - col;
+    if (take > maxLen - n) take = maxLen - n;
+    memcpy(buffer + n, row + col, take);
+    n += take;
+    index += take;
+  }
+
+  return n;
 }
 
 // The control task owns the supervisor and through it the HAL. After boot it is the only task that writes the servo, the motor or the I2C bus.
@@ -116,6 +160,7 @@ static void controlTask(void* arg) {
     }
 
     sup.update();
+    runLog.record(sup.tel);
     xQueueOverwrite(telemetryQueue, &sup.tel);
     vTaskDelayUntil(&last, pdMS_TO_TICKS(CONTROL_PERIOD_MS));
   }
@@ -162,6 +207,20 @@ static void webTask(void* arg) {
     req->send(200, "application/json", "{\"start\":true}");
   });
 
+  // The whole held run as CSV, which is also the page's backfill source. The bounds are snapshotted once and the filler derives each row from the request offset, so a request allocates no buffer.
+  server.on("/log.csv", HTTP_GET, [](AsyncWebServerRequest* req) {
+    uint32_t first = 0;
+    uint32_t total = 0;
+    runLog.copySince(0, nullptr, 0, first, total);
+    AsyncWebServerResponse* res = req->beginChunkedResponse(
+        "text/csv",
+        [first, total](uint8_t* buffer, size_t maxLen, size_t index) {
+          return csvChunk(first, total, buffer, maxLen, index);
+        });
+    res->addHeader("Content-Disposition", "attachment; filename=\"log.csv\"");
+    req->send(res);
+  });
+
   server.addHandler(&socket);
   server.begin();
 
@@ -170,7 +229,7 @@ static void webTask(void* arg) {
 
   // One receive with no wait per period. If nothing has been published since the last look there is nothing to send, and the page keeps what it has.
   for (;;) {
-    if (xQueueReceive(telemetryQueue, &t, 0) == pdTRUE) publishTelemetry(t);
+    if (xQueueReceive(telemetryQueue, &t, 0) == pdTRUE) publishTelemetry(t, runLog.total());
     socket.cleanupClients();
     vTaskDelayUntil(&last, pdMS_TO_TICKS(TELEMETRY_PERIOD_MS));
   }
