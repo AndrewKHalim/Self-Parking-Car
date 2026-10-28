@@ -31,18 +31,33 @@ int main() {
         unknown < 0.0f, "negative means unknown");
 
   const float known = geom::clearance(cfg, 0.25f, 0.18f);
-  check("clearance is the tighter side", known > 0.121f && known < 0.124f,
-        "the 58 mm body offset comes off");
+  const float wantKnown = 0.18f - car::e_out_R;
+  char knownDetail[64];
+  snprintf(knownDetail, sizeof(knownDetail), "%.1f mm, the 180 mm side less e_out_R",
+           1000.0f * known);
+  check("clearance is the tighter side",
+        fabsf(known - wantKnown) < 1e-6f && known < 0.25f - car::e_out_L,
+        knownDetail);
 
   // The cap falls to the small end on an unknown clearance and binds below the cone-safe limit on a small one.
   const float capUnknown = geom::peakYawCap(cfg, unknown);
   check("the yaw cap fails closed", capUnknown == cfg.psi_cap_min,
         "the small end of the range");
 
-  const float capTight = geom::peakYawCap(cfg, 0.040f);
+  // A clearance inside the band where the half length times sin of the cap is the
+  // binding term, so a cap that matches asin of it has neither clamp applied.
+  const float clearLo = 0.5f * car::L_car * sinf(cfg.psi_cap_min);
+  const float clearHi = 0.5f * car::L_car * sinf(cfg.psi_cap_max);
+  const float clearMid = 0.5f * (clearLo + clearHi);
+  const float capTight = geom::peakYawCap(cfg, clearMid);
+  const float wantTight = asinf(clearMid / (0.5f * car::L_car));
+  char tightDetail[64];
+  snprintf(tightDetail, sizeof(tightDetail), "%.1f deg from a %.1f mm clearance",
+           57.29578f * capTight, 1000.0f * clearMid);
   check("the yaw cap binds on a tight clearance",
-        capTight < cfg.psi_meas_max && capTight > cfg.psi_cap_min,
-        "below the cone-safe limit");
+        fabsf(capTight - wantTight) < 1e-4f && capTight < cfg.psi_cap_max
+          && capTight > cfg.psi_cap_min,
+        tightDetail);
 
   const float capRoomy = geom::peakYawCap(cfg, 0.180f);
   check("the yaw cap opens up with room", capRoomy == cfg.psi_cap_max,
