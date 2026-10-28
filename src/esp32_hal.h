@@ -21,6 +21,15 @@ constexpr int PIN_XSHUT_REAR = 10;
 constexpr int PIN_SERVO = 17;
 constexpr int PIN_MOTOR_IN1 = 18;
 constexpr int PIN_MOTOR_IN2 = 21;
+constexpr int PIN_MOTOR_B1 = 4;
+constexpr int PIN_MOTOR_B2 = 5;
+
+// The two motors are mirrored, so one channel has to drive flipped or the car
+// spins on the spot. Channel A on 18 and 21 is the left motor, B on 4 and 5 the
+// right. Both flags came from the main branch's pair and are settled by a
+// forward pulse with the wheels off the ground.
+constexpr bool INVERT_LEFT_MOTOR = true;
+constexpr bool INVERT_RIGHT_MOTOR = false;
 
 // The address each sensor ends up on. 0x29 is where they all start.
 constexpr uint8_t ADDR_LEFT = 0x29;
@@ -42,13 +51,18 @@ struct Esp32Hal : Hal {
 
   // Bring up the bus, motor, servo and sensors. False means a sensor did not answer, which the caller reports and carries on from, since the watchdogs decide.
   bool begin() {
-    Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
-
-    // The driver pins go low first, so the car cannot move while the rest of the hardware comes up.
+    // The driver pins go low first, so the car cannot move while the rest of the
+    // hardware comes up.
     pinMode(PIN_MOTOR_IN1, OUTPUT);
     pinMode(PIN_MOTOR_IN2, OUTPUT);
+    pinMode(PIN_MOTOR_B1, OUTPUT);
+    pinMode(PIN_MOTOR_B2, OUTPUT);
     digitalWrite(PIN_MOTOR_IN1, LOW);
     digitalWrite(PIN_MOTOR_IN2, LOW);
+    digitalWrite(PIN_MOTOR_B1, LOW);
+    digitalWrite(PIN_MOTOR_B2, LOW);
+
+    Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
 
     // 1000 to 2000 us is the datasheet table, so 90 degrees lands on the SG90's 1500 us neutral and one commanded degree is one real degree.
     servo.setPeriodHertz(50);
@@ -85,18 +99,12 @@ struct Esp32Hal : Hal {
     servo.write((int)lroundf(deg));
   }
 
-  void setMotor(int dir) override {
-    // The DRV8833 truth table. One input high drives, and which one sets direction. Both low floats the outputs, the gentle brake. Both high is the hard one.
-    if (dir > 0) {
-      digitalWrite(PIN_MOTOR_IN1, HIGH);
-      digitalWrite(PIN_MOTOR_IN2, LOW);
-    } else if (dir < 0) {
-      digitalWrite(PIN_MOTOR_IN1, LOW);
-      digitalWrite(PIN_MOTOR_IN2, HIGH);
-    } else {
-      digitalWrite(PIN_MOTOR_IN1, LOW);
-      digitalWrite(PIN_MOTOR_IN2, LOW);
-    }
+  void setMotor(int dir, uint8_t duty = 255) override {
+    // Both channels take the same direction, each with its own inversion, so the
+    // car tracks straight on paper. A curve here is motor mismatch, which belongs
+    // in telemetry and not in a trim.
+    driveChannel(PIN_MOTOR_IN1, PIN_MOTOR_IN2, dir, duty, INVERT_LEFT_MOTOR);
+    driveChannel(PIN_MOTOR_B1, PIN_MOTOR_B2, dir, duty, INVERT_RIGHT_MOTOR);
   }
 
   float now() override {
@@ -104,6 +112,26 @@ struct Esp32Hal : Hal {
   }
 
  private:
+  // One DRV8833 channel. Every write is analogWrite because the first PWM on a
+  // pin hands it to the LEDC peripheral, and digitalWrite then refuses the pin.
+  // dir 0 writes zero to both inputs, which floats the outputs and is the gentle
+  // brake the rear limit wants.
+  static void driveChannel(int inA, int inB, int dir, uint8_t duty, bool invert) {
+    if (dir == 0) {
+      analogWrite(inA, 0);
+      analogWrite(inB, 0);
+      return;
+    }
+    const bool fwd = (dir > 0) != invert;
+    if (fwd) {
+      analogWrite(inA, duty);
+      analogWrite(inB, 0);
+    } else {
+      analogWrite(inA, 0);
+      analogWrite(inB, duty);
+    }
+  }
+
   // Enable one sensor, move it off 0x29 into continuous mode. init() runs before setAddress() because the device is still at 0x29 and no other is awake.
   static bool bringUp(VL53L0X& s, int xshut, uint8_t addr) {
     digitalWrite(xshut, HIGH);

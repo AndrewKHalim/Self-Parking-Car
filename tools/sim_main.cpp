@@ -71,7 +71,8 @@ struct Sim : Hal {
 
   void setServo(float deg) override { cmdDelta = (deg - 90.0f) * kDeg; }
 
-  void setMotor(int dir) override { motorDir = dir; }
+  // The plant takes its speed from Config::speed, so the duty is ignored here.
+  void setMotor(int dir, uint8_t) override { motorDir = dir; }
 
   // ========================================================= plant ============
   void step(float dt) {
