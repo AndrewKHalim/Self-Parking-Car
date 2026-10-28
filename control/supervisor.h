@@ -277,7 +277,7 @@ struct Supervisor {
   void stepBackIn(float dt, const geom::Pose& p, const geom::Pose& fp,
                   float gRear, float psiCap, float tolOff, float tolAlign) {
     // Reverse with the inner loop on the servo.
-    hal->setMotor(-1);
+    hal->setMotor(-1, cfg.reverse_duty);
     travel += driveSpeed(cfg) * dt;
 
     if (p.ok) {
@@ -408,7 +408,7 @@ struct Supervisor {
         servoDeg = 90.0f + cmd * 57.29578f;
         hal->setServo(servoDeg);
         const int strokeDir = (cfg.stroke_dir > 0) ? 1 : -1;
-        hal->setMotor(strokeDir);
+        hal->setMotor(strokeDir, cfg.stroke_duty);
 
         bool done = (t >= strokeDur);
         bool abort = false;

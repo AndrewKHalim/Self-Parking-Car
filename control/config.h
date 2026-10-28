@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 // Every tunable in one place. PLAN.md section 13 lists what is left to measure. The chassis geometry is a fact of the car, so it lives in the car namespace.
 
 // How the front wheels are steered. An Ackermann inner wheel reaches its stop first, where PARALLEL holds both at one angle.
@@ -67,6 +69,11 @@ struct Config {
   // Provisional, this tree's figure for the 468 mm car, and replaced by a timed
   // 20 cm reverse at the chosen reverse duty.
   float speed     = 0.15f;
+  // Duty on the two drive legs. 90 of 255 is the reverse crawl and 140 the
+  // forward stroke, and both are replaced by the duty that produces the
+  // measured speed, since driveScale only corrects the driver's voltage drop.
+  uint8_t reverse_duty = 90;
+  uint8_t stroke_duty  = 140;
   float d_stop    = 0.020f;
 
   // Tolerances, bay target, correction budget and stroke timing.
