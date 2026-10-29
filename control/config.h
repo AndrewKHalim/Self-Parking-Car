@@ -60,11 +60,13 @@ struct Config {
   float e_R      = 0.00f;
 
   // The chassis carries the printed rack, pinion and two horns, so the front
-  // wheels are not parallel. motor_driver is the board being fitted. motor_supply
-  // is provisional, replaced by the pack voltage under load at V0.
+  // wheels are not parallel. motor_driver is the board being fitted. The pack
+  // is 3S Li-ion, 11.1 V nominal and 12.6 V full. The DRV8833 is rated to
+  // 10.8 V, the stock motor to 6 V, so the motor rail is bucked and
+  // motor_supply is the voltage at the driver. V0 measures it at the VM pin.
   SteerModel steer_model = SteerModel::ACKERMANN;
   MotorDriver motor_driver = MotorDriver::DRV8833;
-  float motor_supply = 7.4f;
+  float motor_supply = 6.0f;
 
   // Front wheel drag in a turn that is not steered to the Ackermann relation.
   float scrub_gain = 0.05f;
