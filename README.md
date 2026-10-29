@@ -279,4 +279,4 @@ The control core has no hardware calls in it, so the same code runs against the 
 
 ## Status
 
-The firmware builds and links for the N16R8 at RAM 24.8 percent (81,300 of 327,680 bytes) and Flash 16.1 percent of the 6,553,600 byte app partition (1,056,926 bytes). The control core, the HAL adapter and the dashboard are written and compile for the target, and the host simulator builds with them. The board has never been flashed: no sensor reading, servo position or WiFi join has been verified on real hardware. The maneuver itself remains unproven until the car runs, and the step response above is simulated.
+The firmware builds and links for the N16R8 at RAM 24.8 percent (81,300 of 327,680 bytes) and Flash 16.1 percent of the 6,553,600 byte app partition (1,056,922 bytes). The control core, the HAL adapter and the dashboard are written and compile for the target, and the host simulator builds with them. The board has never been flashed: no sensor reading, servo position or WiFi join has been verified on real hardware. The maneuver itself remains unproven until the car runs, and the step response above is simulated.
