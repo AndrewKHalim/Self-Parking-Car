@@ -14,7 +14,7 @@ The car uses VL53L0X time-of-flight sensors for autonomous reverse parking. The 
 | motor driver | DRV8833 module | a TB6612FNG also works and gives a clean sleep between runs |
 | drive motor | stock Tamiya yellow motor, 6V rated | |
 | chassis | Tamiya RC chassis with servo bay | the stock knuckle is turned by the drive motor through a plastic arm, so it cannot take a commanded angle and the chassis is converted to servo steering |
-| power | 2S LiPo plus buck converter | the motor rail needs 6V regulation |
+| power | 3S Li-ion, 11.1 V nominal and 12.6 V full, plus a buck converter | the DRV8833 is rated to 10.8 V and the stock motor to 6 V, so VM must never be fed from the pack directly |
 
 The three sensors are addressed over one I2C bus. Each one is enabled in turn through its XSHUT line and given an address: `0x29` left, `0x2A` right, `0x2B` rear.
 
