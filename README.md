@@ -255,7 +255,7 @@ The solid arrows are the loop. The reference and the measured pose meet at the s
 
 The controller works in one angle, `delta_eq`. The bicycle model in the simulator is exact for it rather than an approximation, because the rear wheels are fixed and the whole vehicle state is already referenced to the rear axle centre.
 
-Two things are switches rather than facts, because neither has been measured yet. The steering model decides how much lock the car may be given: with Ackermann steering the inner wheel reaches its stop before the equivalent angle does, and the equivalent angle is held below that. The motor driver decides the speed and the stopping distance: the DRV8833 and the LM298 have the same truth table, so the firmware does not care which one is fitted, but the LM298 drops several volts across itself and would run the car at about 71 percent of the speed.
+Two things are switches rather than facts, because neither has been measured yet. The steering model decides how much lock the car may be given: with Ackermann steering the inner wheel reaches its stop before the equivalent angle does, and the equivalent angle is held below that. The motor driver decides the speed and the stopping distance: the DRV8833 and the LM298 have the same truth table, so the firmware does not care which one is fitted, but the LM298 drops several volts across itself and would run the car at about 63.6 percent of the DRV8833's speed on the same rail.
 
 ## The layout
 
