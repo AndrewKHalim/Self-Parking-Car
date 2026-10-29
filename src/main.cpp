@@ -13,20 +13,12 @@
 #include <freertos/queue.h>
 #include <freertos/task.h>
 
+#include "config.h"
 #include "dashboard_html.h"
 #include "esp32_hal.h"
 #include "supervisor.h"
 #include "telemetry_ring.h"
 #include "wifi_config.h"
-
-// 30 Hz, which is what Config::dt says. The control law measures its own dt, but the stroke profiles assume a tick.
-constexpr uint32_t CONTROL_PERIOD_MS = 33;
-
-// Ten a second is enough to watch a maneuver that takes seconds, and keeps the socket work far below the tick rate.
-constexpr uint32_t TELEMETRY_PERIOD_MS = 100;
-
-// How long the web task waits for the configured network before falling back to its own access point.
-constexpr uint32_t WIFI_TIMEOUT_MS = 15000;
 
 // The core map. Control sits on core 1 with the Arduino loop task. The web task and async TCP sit on core 0 beside wifi and lwip, pinned there by sdkconfig and by CONFIG_ASYNC_TCP_RUNNING_CORE in platformio.ini.
 constexpr BaseType_t CONTROL_CORE = 1;
@@ -174,7 +166,7 @@ static void controlTask(void* arg) {
     }
 
     xQueueOverwrite(telemetryQueue, &sup.tel);
-    vTaskDelayUntil(&last, pdMS_TO_TICKS(CONTROL_PERIOD_MS));
+    vTaskDelayUntil(&last, pdMS_TO_TICKS(timing::CONTROL_PERIOD_MS));
   }
 }
 
@@ -185,7 +177,7 @@ static void connectNetwork() {
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   const uint32_t started = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - started < WIFI_TIMEOUT_MS) {
+  while (WiFi.status() != WL_CONNECTED && millis() - started < timing::WIFI_TIMEOUT_MS) {
     delay(250);
     Serial.print(".");
   }
@@ -196,7 +188,7 @@ static void connectNetwork() {
   }
 
   Serial.printf("\nwifi not joined in %us, starting the access point\n",
-                (unsigned)(WIFI_TIMEOUT_MS / 1000));
+                (unsigned)(timing::WIFI_TIMEOUT_MS / 1000));
   WiFi.mode(WIFI_AP);
   WiFi.softAP(AP_SSID, AP_PASSWORD);
   Serial.printf("ap %s password %s, open http://%s/\n", AP_SSID, AP_PASSWORD,
@@ -243,7 +235,7 @@ static void webTask(void* arg) {
   for (;;) {
     if (xQueueReceive(telemetryQueue, &t, 0) == pdTRUE) publishTelemetry(t, runLog.total());
     socket.cleanupClients();
-    vTaskDelayUntil(&last, pdMS_TO_TICKS(TELEMETRY_PERIOD_MS));
+    vTaskDelayUntil(&last, pdMS_TO_TICKS(timing::TELEMETRY_PERIOD_MS));
   }
 }
 
