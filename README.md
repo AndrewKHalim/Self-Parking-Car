@@ -33,6 +33,8 @@ The three sensors are addressed over one I2C bus. Each one is enabled in turn th
 | 18 | DRV8833 IN1 (left motor) |
 | 21 | DRV8833 IN2 (left motor) |
 
+The table is the harness as it stands. Every pin in it, the two inversion flags, the three sensor addresses and the sensor timing live in `control/config.h` under `namespace board`, so a measured change touches one file.
+
 Leave GPIO 26 to 32 alone: the octal PSRAM claims them. GPIO 19 and 20 are the USB pins, and GPIO 0, 3, 45 and 46 are strapping pins that are sampled at boot.
 
 ## Instructions
@@ -170,8 +172,8 @@ The core map:
 
 | what runs | core | where it is set |
 |---|---|---|
-| control task | 1 | `xTaskCreatePinnedToCore`, priority 5, 8 KB, 33 ms period |
-| web task | 0 | `xTaskCreatePinnedToCore`, priority 2, 8 KB, 100 ms period |
+| control task | 1 | `xTaskCreatePinnedToCore`, priority 5, 8 KB in `src/main.cpp`, 33 ms from `control/config.h` |
+| web task | 0 | `xTaskCreatePinnedToCore`, priority 2, 8 KB in `src/main.cpp`, 100 ms from `control/config.h` |
 | AsyncTCP task | 0 | `CONFIG_ASYNC_TCP_RUNNING_CORE=0` in `platformio.ini` |
 | WiFi and lwIP tasks | 0 | the platform's sdkconfig: `CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0` and `CONFIG_LWIP_TCPIP_TASK_AFFINITY=0x0` |
 
@@ -260,6 +262,7 @@ Two things are switches rather than facts, because neither has been measured yet
 | path | what is in it |
 |---|---|
 | `control/` | the control core: geometry, the steering loop, the supervisor and the stroke model. no hardware calls, only the `Hal` interface |
+| `control/config.h` | every tunable, in one place: the chassis geometry, drive and steering, the pins, and the sensor and task timing. the one file to edit after measuring |
 | `control/ackermann.h` | the Ackermann relations, splitting the equivalent angle into the two front wheel angles |
 | `tools/sim_main.cpp` | the host plant, the sensor forward model, the scenarios and the fault injection |
 | `tools/step_rig.cpp` | the lateral step-response rig: a 40 mm reference step through the real control law |
