@@ -1,0 +1,30 @@
+# Regenerable. Do not commit.
+.pio/
+.venv/
+.venv-plot/
+build/
+src/idf_component.yml
+
+# Host tooling
+*.o
+*.pyc
+__pycache__/
+*.d
+compile_commands.json
+.omp/
+
+# Internal working notes for the people building this. They stay in the
+# working tree and out of the published branch, which carries the code and
+# the README.
+AGENTS.md
+HANDOFF.md
+PLAN.md
+INFO.md
+AUDIT.md
+OVERVIEW.md
+REVIEW.md
+REVIEW-BRIEF.md
+CONTROL_CORE_PLAN.md
+PROOF.md
+TELEMETRY_JSON_ACCESS_PLAN.md
+lib/Network/README.md
