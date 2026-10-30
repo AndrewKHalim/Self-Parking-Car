@@ -136,19 +136,23 @@ struct Config {
   float dt      = 0.033f;
 };
 
-// Board pin map for the N16R8. GPIO 26 to 32 are octal PSRAM, 19 and 20 USB,
-// and 0, 3, 45, 46 are strapping pins sampled at boot, so none appear.
+// Board pin map for the ESP32-S3 Super Mini. GPIO 26 to 32 carry the
+// in-package flash, 19 and 20 are USB, 43 and 44 are UART0, and 0, 3, 45 and 46
+// are strapping pins, so none of them appear here. Ten signals are needed and
+// only seven pins are free of any boot role. The other three, SCL, the rear
+// XSHUT and the servo, sit on FSPI IO MUX pins, which are free only because
+// nothing here drives SPI2.
 namespace board {
 constexpr int PIN_I2C_SDA = 8;
 constexpr int PIN_I2C_SCL = 9;
-constexpr int PIN_XSHUT_L = 15;
-constexpr int PIN_XSHUT_R = 16;
+constexpr int PIN_XSHUT_L = 1;
+constexpr int PIN_XSHUT_R = 2;
 constexpr int PIN_XSHUT_REAR = 10;
-constexpr int PIN_SERVO = 17;
-// Channel A on 18 and 21 is the left motor, B on 4 and 5 the right. Both pairs
+constexpr int PIN_SERVO = 11;
+// Channel A on 6 and 7 is the left motor, B on 4 and 5 the right. Both pairs
 // are provisional and V0 C5 decides which channel drives which side.
-constexpr int PIN_MOTOR_IN1 = 18;
-constexpr int PIN_MOTOR_IN2 = 21;
+constexpr int PIN_MOTOR_IN1 = 6;
+constexpr int PIN_MOTOR_IN2 = 7;
 constexpr int PIN_MOTOR_B1 = 4;
 constexpr int PIN_MOTOR_B2 = 5;
 
@@ -172,6 +176,20 @@ constexpr uint32_t SENSOR_PERIOD_MS = 33;
 // outlasts one measurement, so a healthy sensor never trips it.
 constexpr uint16_t SENSOR_TIMEOUT_MS = 50;
 }
+
+// Ten signals on one board, so two functions sharing a pin is a harness mistake
+// that would only show up as two peripherals fighting. The build catches it.
+constexpr bool pinsDistinct() {
+  const int p[] = {board::PIN_I2C_SDA, board::PIN_I2C_SCL, board::PIN_XSHUT_L,
+                   board::PIN_XSHUT_R, board::PIN_XSHUT_REAR, board::PIN_SERVO,
+                   board::PIN_MOTOR_IN1, board::PIN_MOTOR_IN2,
+                   board::PIN_MOTOR_B1, board::PIN_MOTOR_B2};
+  for (int i = 0; i < 10; ++i)
+    for (int j = i + 1; j < 10; ++j)
+      if (p[i] == p[j]) return false;
+  return true;
+}
+static_assert(pinsDistinct(), "board pins must be unique");
 
 namespace timing {
 // 30 Hz, which is what Config::dt says. The control law measures its own dt,

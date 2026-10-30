@@ -8,7 +8,7 @@ The car uses VL53L0X time-of-flight sensors for autonomous reverse parking. The 
 
 | part | spec | notes |
 |---|---|---|
-| MCU | ESP32-S3-DevkitC-1 N16R8 | 16MB flash, 8MB octal PSRAM, dual core at 240MHz |
+| MCU | ESP32-S3 Super Mini | 4MB flash, 240MHz dual core, native USB-C, module soldered to the board |
 | ToF sensors | 3x VL53L0X | must be VL53L0X, not VL53L1X. they are not drop-in compatible and use a different library. two face out sideways, one faces back |
 | steering servo | SG90 or MG996R | the MG996R has less backlash, which matters here |
 | motor driver | DRV8833 module | a TB6612FNG also works and gives a clean sleep between runs |
@@ -22,20 +22,20 @@ The three sensors are addressed over one I2C bus. Each one is enabled in turn th
 
 | GPIO | function |
 |---|---|
+| 1 | VL53L0X left XSHUT |
+| 2 | VL53L0X right XSHUT |
 | 4 | DRV8833 IN3 (right motor) |
 | 5 | DRV8833 IN4 (right motor) |
+| 6 | DRV8833 IN1 (left motor) |
+| 7 | DRV8833 IN2 (left motor) |
 | 8 | I2C SDA |
 | 9 | I2C SCL |
-| 15 | VL53L0X left XSHUT |
-| 16 | VL53L0X right XSHUT |
 | 10 | VL53L0X rear XSHUT |
-| 17 | steering servo signal, 50Hz, 1000 to 2000µs |
-| 18 | DRV8833 IN1 (left motor) |
-| 21 | DRV8833 IN2 (left motor) |
+| 11 | steering servo signal, 50Hz, 1000 to 2000µs |
 
 The table is the harness as it stands. Every pin in it, the two inversion flags, the three sensor addresses and the sensor timing live in `control/config.h` under `namespace board`, so a measured change touches one file.
 
-Leave GPIO 26 to 32 alone: the octal PSRAM claims them. GPIO 19 and 20 are the USB pins, and GPIO 0, 3, 45 and 46 are strapping pins that are sampled at boot.
+Leave GPIO 26 to 32 alone: the in-package flash claims them. GPIO 19 and 20 are the USB pins, GPIO 43 and 44 are UART0, and GPIO 0, 3, 45 and 46 are strapping pins that are sampled at boot. GPIO 9, 10 and 11 are FSPI IO MUX pins, safe here only because nothing on this board drives SPI2.
 
 ## Instructions
 
@@ -282,4 +282,4 @@ The control core has no hardware calls in it, so the same code runs against the 
 
 ## Status
 
-The firmware builds and links for the N16R8 at RAM 24.8 percent (81,300 of 327,680 bytes) and Flash 16.1 percent of the 6,553,600 byte app partition (1,056,922 bytes). The control core, the HAL adapter and the dashboard are written and compile for the target, and the host simulator builds with them. The board has never been flashed: no sensor reading, servo position or WiFi join has been verified on real hardware. The maneuver itself remains unproven until the car runs, and the step response above is simulated.
+The firmware builds and links for the ESP32-S3 Super Mini at RAM 24.7 percent (80,840 of 327,680 bytes) and Flash 25.9 percent of the 4,063,232 byte `app0` partition (1,051,684 bytes), on a 4 MB board with the `max_app_4MB.csv` table. The control core, the HAL adapter and the dashboard are written and compile for the target, and the host simulator builds with them. The board has never been flashed: no sensor reading, servo position or WiFi join has been verified on real hardware. The maneuver itself remains unproven until the car runs, and the step response above is simulated.
