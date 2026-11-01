@@ -101,16 +101,16 @@ struct Config {
   // box alone would allow about 50 mm of offset at this alignment tolerance,
   // which is slack, so the sensor noise sets the tolerances and not the bay.
   // tol_off and tol_align stay until V5 has ten runs.
-  // rear_target is a reading, and the rear sensor face sits 15.5 mm forward of
-  // the tail, measured 2026-11-02 as 35.5 mm from the rear wheel centre to the
-  // rearmost point less the 20 mm sensor offset. 0.0535 with the 0.012 margin
-  // asks for 0.0655 and leaves the tail 50 mm off the wall, 166 mm inside the
-  // mouth. The host sim stops further out, because its plant brakes in 11 mm
-  // where 0.020 is assumed and the trigger is sampled every 33 ms, so treat
-  // 0.0535 as the value until V0 C3 measures the braking distance.
+  // rear_target is a reading, and the rear sensor face is the rearmost point of
+  // the car, 35.5 mm behind the rear axle when taped on 2026-11-02, so the
+  // reading is the tail clearance itself. 0.038 with the 0.012 margin asks for
+  // 0.050 and leaves the tail 50 mm off the wall, 166 mm inside the mouth. The
+  // host sim stops further out, because its plant brakes in 11 mm where 0.020 is
+  // assumed and the trigger is sampled every 33 ms, so treat 0.038 as the value
+  // until V0 C3 measures the braking distance.
   float tol_off      = 0.010f;
   float tol_align    = 0.061f;
-  float rear_target  = 0.0535f;
+  float rear_target  = 0.038f;
   float rear_margin  = 0.012f;
   int   dwell        = 3;
   // 24 strokes, not 12. The 80 mm baseline leaves the heading estimate noisy
