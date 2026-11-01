@@ -119,6 +119,15 @@ cd bench
 
 If the car pulls away backwards, the inversion flag for that side is wrong. If it does not move at all, the fault is in the motor wiring, the driver's power or its VM rail, and not the parking logic.
 
+The same project builds an I2C scan, which is what to flash when the sensors do not answer:
+
+```bash
+cd bench
+../.venv/bin/pio run -e i2c_scan
+```
+
+It drives the three XSHUT lines high, scans the bus with SDA on GPIO 8 and SCL on GPIO 9, then does it again with the two swapped, and prints every address that answers. A device at `0x29` with the pins as wired and nothing when swapped means the bus is healthy and the wiring is right. The other way round means the two lines are crossed. Nothing in either scan means no sensor is powered or out of reset, which is a different fault from a crossed bus.
+
 ### 3. The network and the dashboard
 
 The firmware joins the network named in `src/wifi_config.h`: put the SSID and the password there, or leave the placeholders and let it fall back. The join is bounded at 15 s, after which the car brings up its own access point:
