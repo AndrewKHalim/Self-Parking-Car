@@ -75,7 +75,7 @@ const T_SPAN_MS = 20000;
 const AXES = [
   { key: 'x', caption: 'x mm', min: -80, max: 80, colour: '#4c9aff', pose: true },
   { key: 'psi', caption: 'psi deg', min: -30, max: 30, colour: '#ffb020', pose: true },
-  { key: 'servo', caption: 'servo deg', min: 45, max: 135, colour: '#5fd38b', pose: false }
+  { key: 'servo', caption: 'servo deg', min: 10, max: 170, colour: '#5fd38b', pose: false }
 ];
 
 // One record per sample, in time order. The CSV seeds it with up to 34 s of run, and the socket appends only what is newer.

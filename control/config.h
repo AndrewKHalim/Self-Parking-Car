@@ -60,6 +60,26 @@ constexpr float e_out_L = 0.000f;
 constexpr float e_out_R = 0.000f;
 }
 
+// The steering linkage. The servo stands upright with the module 0.8, 12 tooth
+// pinion on its spline, and that pinion drives the rack, so one servo degree is
+// 0.0838 mm of rack. The steering arm is 14.00 mm from the kingpin to the tie
+// rod, so one servo degree is 0.343 degrees at the road wheel. The control law
+// works in wheel angle, so it scales by this before it writes. Both figures are
+// from the CAD, which has no servo mount and no tie rod, so the ratio covers
+// the pinion and the arm only. The centre and the sign are still the assumed
+// 1500 us and left. V0 B1 and B2 replace all three.
+namespace servo {
+constexpr float CENTRE_DEG = 90.0f;
+constexpr float DIR        = 1.0f;
+constexpr float PER_WHEEL  = 2.9f;
+}
+
+// Servo command in degrees for a wheel angle in radians, which is what the
+// supervisor holds. One place, because the drive and the strokes both write it.
+inline float servoDegFromWheel(float wheelRad) {
+  return servo::CENTRE_DEG + servo::DIR * servo::PER_WHEEL * wheelRad * 57.29578f;
+}
+
 struct Config {
   // Sensor offsets in metres. Unmeasured, so zero, and the calibration folds them into S0 and the trim, which is what replaces them.
   float e_L      = 0.00f;

@@ -69,7 +69,11 @@ struct Sim : Hal {
     a = gL; b = gR; c = gRear;
   }
 
-  void setServo(float deg) override { cmdDelta = (deg - 90.0f) * kDeg; }
+  void setServo(float deg) override {
+    // The supervisor writes a servo command, so the linkage is undone here to
+    // get back to the wheel angle the plant turns.
+    cmdDelta = (deg - servo::CENTRE_DEG) * kDeg / (servo::PER_WHEEL * servo::DIR);
+  }
 
   // The plant takes its speed from Config::speed, so the duty is ignored here.
   void setMotor(int dir, uint8_t) override { motorDir = dir; }

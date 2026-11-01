@@ -157,7 +157,7 @@ struct Supervisor {
     stroke = Stroke::NONE;
     if (hal) {
       hal->setMotor(0);
-      hal->setServo(90.0f);
+      hal->setServo(servo::CENTRE_DEG);
     }
   }
 
@@ -254,7 +254,7 @@ struct Supervisor {
     switch (phase) {
       case Phase::IDLE:
         hal->setMotor(0);
-        hal->setServo(90.0f);
+        hal->setServo(servo::CENTRE_DEG);
         break;
 
       case Phase::BACK_IN:
@@ -286,7 +286,7 @@ struct Supervisor {
 
     if (p.ok) {
       const float delta = ctl.step(p.x, p.psi, -driveSpeed(cfg), dt, psiCap);
-      servoDeg = 90.0f + delta * 57.29578f;
+      servoDeg = servoDegFromWheel(delta);
       hal->setServo(servoDeg);
     }
 
@@ -409,7 +409,7 @@ struct Supervisor {
           if (t >= strokeDur) cmd = 0.0f;
         }
 
-        servoDeg = 90.0f + cmd * 57.29578f;
+        servoDeg = servoDegFromWheel(cmd);
         hal->setServo(servoDeg);
         const int strokeDir = (cfg.stroke_dir > 0) ? 1 : -1;
         hal->setMotor(strokeDir, cfg.stroke_duty);
@@ -466,8 +466,8 @@ struct Supervisor {
 
         if (done) {
           hal->setMotor(0);
-          hal->setServo(90.0f);
-          servoDeg = 90.0f;
+          hal->setServo(servo::CENTRE_DEG);
+          servoDeg = servo::CENTRE_DEG;
 
           // Learn the shift produced against the one planned, which absorbs the model, the surface, the speed and the servo.
           if (stroke == Stroke::TRANSLATE && p.ok && strokePlanned > 0.015f) {
@@ -503,8 +503,8 @@ struct Supervisor {
       case 2: {
         // Settle with the brakes on and the wheels centred, and wait for the car to be still.
         hal->setMotor(0);
-        hal->setServo(90.0f);
-        servoDeg = 90.0f;
+        hal->setServo(servo::CENTRE_DEG);
+        servoDeg = servo::CENTRE_DEG;
         if (now - strokeT0 >= strokeDur + cfg.brake_settle) {
           strokeCount++;
           sub = 0;
@@ -532,9 +532,10 @@ struct Supervisor {
     return a;
   }
 
-  // The steer angle the wheels actually reach for a given command.
+  // The steer angle the wheels actually reach for a given command. The deadband
+  // is a servo angle, so it shrinks by the linkage ratio in wheel space.
   float effAmp(float amp) {
-    float a = amp - cfg.servo_deadband;
+    float a = amp - cfg.servo_deadband / servo::PER_WHEEL;
     if (a < 0.05f) a = 0.05f;
     return a;
   }
@@ -547,11 +548,11 @@ struct Supervisor {
     return fabsf(dpsi) * car::L_wb / (v * tanD);
   }
 
-  // How far past the trigger the peak lands while the servo swings to the opposite lock.
+  // How far past the trigger the peak lands while the servo swings to the opposite lock. The servo travels the wheel angle times the linkage ratio.
   float slewOvershoot(float amp) {
     const float tanD = tanf(effAmp(amp));
     const float yawRate = cfg.speed * tanD / car::L_wb;
-    return yawRate * (effAmp(amp) / cfg.servo_rate);
+    return yawRate * (servo::PER_WHEEL * effAmp(amp) / cfg.servo_rate);
   }
 
   void beginRotate(const geom::Pose& p, float psiCap, float now) {
@@ -675,9 +676,9 @@ struct Supervisor {
   void centreSteering(float dt) {
     // Ramp the servo back to centre rather than snapping it.
     const float step = 180.0f * dt;
-    if (servoDeg > 90.0f + step) servoDeg -= step;
-    else if (servoDeg < 90.0f - step) servoDeg += step;
-    else servoDeg = 90.0f;
+    if (servoDeg > servo::CENTRE_DEG + step) servoDeg -= step;
+    else if (servoDeg < servo::CENTRE_DEG - step) servoDeg += step;
+    else servoDeg = servo::CENTRE_DEG;
     hal->setServo(servoDeg);
   }
 };
