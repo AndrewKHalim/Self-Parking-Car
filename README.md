@@ -24,10 +24,10 @@ The three sensors are addressed over one I2C bus. Each one is enabled in turn th
 |---|---|
 | 1 | VL53L0X left XSHUT |
 | 2 | VL53L0X right XSHUT |
-| 4 | DRV8833 IN3 (right motor) |
-| 5 | DRV8833 IN4 (right motor) |
-| 6 | DRV8833 IN1 (left motor) |
-| 7 | DRV8833 IN2 (left motor) |
+| 6 | DRV8833 IN3 (right motor) |
+| 7 | DRV8833 IN4 (right motor) |
+| 4 | DRV8833 IN1 (left motor) |
+| 5 | DRV8833 IN2 (left motor) |
 | 8 | I2C SDA |
 | 9 | I2C SCL |
 | 10 | VL53L0X rear XSHUT |
