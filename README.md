@@ -119,6 +119,8 @@ cd bench
 
 If the car pulls away backwards, the inversion flag for that side is wrong. If it does not move at all, the fault is in the motor wiring, the driver's power or its VM rail, and not the parking logic.
 
+The project also builds a steering sweep, `env:servo_sweep`, which steps the servo through 65 to 115 degrees in 5 degree steps, 1.5 s apart, and prints each angle with the pulse it sends. It is how the straight-ahead command and the wheel angle per servo degree are measured, because the control law works in wheel angle and writes servo degrees as if the two were equal.
+
 The same project builds an I2C scan, which is what to flash when the sensors do not answer:
 
 ```bash
