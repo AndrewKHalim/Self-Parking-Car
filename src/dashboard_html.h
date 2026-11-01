@@ -46,6 +46,8 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(<!doctype html>
   <div class="cell"><span class="k">t</span><span class="v" id="v-t">-</span></div>
   <div class="cell"><span class="k">x</span><span class="v" id="v-x">-</span></div>
   <div class="cell"><span class="k">psi</span><span class="v" id="v-psi">-</span></div>
+  <div class="cell"><span class="k">gL</span><span class="v" id="v-gl">-</span></div>
+  <div class="cell"><span class="k">gR</span><span class="v" id="v-gr">-</span></div>
   <div class="cell"><span class="k">rear</span><span class="v" id="v-rear">-</span></div>
   <div class="cell"><span class="k">servo</span><span class="v" id="v-servo">-</span></div>
   <div class="cell"><span class="k">phase</span><span class="v" id="v-phase">-</span></div>
@@ -65,7 +67,7 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(<!doctype html>
 <script>
 // The firmware sends integers. t in ms, x and gaps in mm, psi in milliradians, servo in degrees. The page converts for display only.
 const MRAD_TO_DEG = 180 / Math.PI / 1000;
-const REAR_OUT_OF_RANGE_MM = 8000;
+const OUT_OF_RANGE_MM = 8000;
 const MAX_POINTS = 1200;
 const T_SPAN_MS = 20000;
 
@@ -114,7 +116,9 @@ function show(d) {
   byId('v-t').textContent = (d.t / 1000).toFixed(1) + ' s';
   byId('v-x').textContent = d.x + ' mm';
   byId('v-psi').textContent = (d.psi * MRAD_TO_DEG).toFixed(1) + '\u00b0';
-  byId('v-rear').textContent = d.rear >= REAR_OUT_OF_RANGE_MM ? 'far' : d.rear + ' mm';
+  byId('v-gl').textContent = d.gL >= OUT_OF_RANGE_MM ? 'none' : d.gL + ' mm';
+  byId('v-gr').textContent = d.gR >= OUT_OF_RANGE_MM ? 'none' : d.gR + ' mm';
+  byId('v-rear').textContent = d.rear >= OUT_OF_RANGE_MM ? 'far' : d.rear + ' mm';
   byId('v-servo').textContent = d.servo + '\u00b0';
   byId('v-phase').textContent = d.phase;
   byId('v-strokes').textContent = d.strokes;

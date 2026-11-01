@@ -136,7 +136,7 @@ The firmware joins the network named in `src/wifi_config.h`: put the SSID and th
 |---|---|---|
 | `autoparking` | `autoparking` | `http://192.168.4.1/` |
 
-The page shows the live state and a chart of the last 1200 samples, and the button asks the control task to start a run. It refuses before the calibration and ignores the request while a run is in progress. The chart carries three labelled series against time in seconds, x in mm, psi in degrees and the servo in degrees, each on a fixed axis. The page seeds itself from `/log.csv` on load and on every reconnect, so a reload does not lose the run, and the board holds 34 s of it. Telemetry goes to the page over a WebSocket at `/ws`, about ten messages a second.
+The page shows the live state and a chart of the last 1200 samples, and the button asks the control task to start a run. The readout cells are t, x, psi, the left and right side gaps, the rear gap, the servo command, the phase, the stroke count and the calibration flag. The chart carries three labelled series against time in seconds, x in mm, psi in degrees and the servo in degrees, each on a fixed axis. The page seeds itself from `/log.csv` on load and on every reconnect, so a reload does not lose the run, and the board holds 34 s of it. Telemetry goes to the page over a WebSocket at `/ws`, about ten messages a second.
 
 ### 4. The host simulator
 
