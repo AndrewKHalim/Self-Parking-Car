@@ -1,7 +1,12 @@
-// I2C presence test. It scans the bus with the pins as wired and then again
-// with SDA and SCL swapped, so the console answers two questions at once: is
-// anything on the bus at all, and is it wired the right way round. No sensor
-// library, because a scan only needs Wire and the addresses.
+// I2C presence test. It reports what the two bus lines are actually doing,
+// then scans with the pins as wired and again with SDA and SCL swapped, so the
+// console answers three questions at once: are the lines pulled up, is anything
+// on the bus, and is it wired the right way round. No sensor library, because a
+// scan only needs Wire and the addresses.
+//
+// The idle voltage is read on the ADC, since GPIO 8 and 9 are ADC1 channels on
+// the S3. A line clamped near 0 mV is held low, a few hundred is floating with
+// no pull-up, and 3300 or more is a live pull-up, 5 V included.
 //
 // The three XSHUT lines are driven high first, since a VL53L0X held in reset
 // never answers and looks exactly like a broken bus.
@@ -27,9 +32,29 @@ static void scan(TwoWire& bus, int sda, int scl, const char* label) {
   Serial.printf("    %d device(s)\n", found);
 }
 
+// What the line does with nothing driving it. Floating means no pull-up is
+// fitted or the wire is not connected, and a clamped low line means a short or
+// a device holding the bus down.
+static void levels(const char* label) {
+  Serial.printf("--- line levels, %s\n", label);
+  const int pins[] = {board::PIN_I2C_SDA, board::PIN_I2C_SCL};
+  for (int p : pins) {
+    pinMode(p, INPUT);
+    delay(5);
+    const int mvFloat = analogReadMilliVolts(p);
+    const int readFloat = digitalRead(p);
+    pinMode(p, INPUT_PULLUP);
+    delay(5);
+    const int mvPull = analogReadMilliVolts(p);
+    const int readPull = digitalRead(p);
+    Serial.printf("    gpio %d: %4d mV free (%d), %4d mV pulled up (%d)\n", p,
+                  mvFloat, readFloat, mvPull, readPull);
+  }
+}
+
 void setup() {
   Serial.begin(115200);
-  delay(200);
+  delay(300);
 
   // Out of reset, or nothing answers.
   pinMode(board::PIN_XSHUT_L, OUTPUT);
@@ -40,11 +65,24 @@ void setup() {
   digitalWrite(board::PIN_XSHUT_REAR, HIGH);
   delay(50);
 
+  // Read back what the pads are doing, so a shorted XSHUT shows up as a pin
+  // driven high that reads low.
+  const int shuts[] = {board::PIN_XSHUT_L, board::PIN_XSHUT_R,
+                       board::PIN_XSHUT_REAR};
+  for (int p : shuts) {
+    Serial.printf("--- xshut gpio %d reads %d when driven high\n", p,
+                  digitalRead(p));
+  }
+
+  levels("before the bus is opened");
+
   const bool up = Wire.begin(board::PIN_I2C_SDA, board::PIN_I2C_SCL);
   Serial.printf("wire begin %s\n", up ? "ok" : "FAILED");
   scan(Wire, board::PIN_I2C_SDA, board::PIN_I2C_SCL, "as wired");
   Wire.end();
   delay(10);
+
+  levels("after the bus is closed");
 
   const bool swapped = Wire.begin(board::PIN_I2C_SCL, board::PIN_I2C_SDA);
   Serial.printf("wire begin swapped %s\n", swapped ? "ok" : "FAILED");

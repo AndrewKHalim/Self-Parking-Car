@@ -126,7 +126,7 @@ cd bench
 ../.venv/bin/pio run -e i2c_scan
 ```
 
-It drives the three XSHUT lines high, scans the bus with SDA on GPIO 8 and SCL on GPIO 9, then does it again with the two swapped, and prints every address that answers. A device at `0x29` with the pins as wired and nothing when swapped means the bus is healthy and the wiring is right. The other way round means the two lines are crossed. Nothing in either scan means no sensor is powered or out of reset, which is a different fault from a crossed bus.
+It drives the three XSHUT lines high, prints the idle voltage of GPIO 8 and 9 read on the ADC, then scans with SDA on GPIO 8 and SCL on GPIO 9, closes the bus, prints the levels again, and rescans with the two swapped. A device at `0x29` with the pins as wired and nothing when swapped means the bus is healthy and the wiring is right. The other way round means the two lines are crossed. Nothing in either scan means no sensor is powered or out of reset, which is a different fault from a crossed bus. On the levels, a line near 0 mV is held low, a few hundred is floating with no pull-up, and 3300 or more is a live pull-up, a 5 V rail included.
 
 ### 3. The network and the dashboard
 
