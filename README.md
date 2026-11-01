@@ -107,6 +107,18 @@ section.
 
 `lib/Network/src` is committed source with a hand-written `library.json` beside it, because Arduino core 3.3.12 ships `Network` without one and PlatformIO will not link it. Leave it as it is: a symlink into `~/.platformio/packages/` resolves on the machine that made it and nowhere else.
 
+#### Bench drive test
+
+`bench/` is a separate PlatformIO project, so it does not touch the parking firmware, its environment or its config. It has no sensors, no servo and no radio: it drives both motors forward at duty 200 the moment the board is powered and keeps driving until the power is cut, which is what to flash when the question is only whether the drive works. The pin map and the two inversion flags still come from `control/config.h`, so a rewiring carries over.
+
+```bash
+cd bench
+../.venv/bin/pio run                    # -> .pio/build/motor_test/firmware.factory.bin
+../.venv/bin/pio run -t upload          # or flash it with esptool as in section 2
+```
+
+If the car pulls away backwards, the inversion flag for that side is wrong. If it does not move at all, the fault is in the motor wiring, the driver's power or its VM rail, and not the parking logic.
+
 ### 3. The network and the dashboard
 
 The firmware joins the network named in `src/wifi_config.h`: put the SSID and the password there, or leave the placeholders and let it fall back. The join is bounded at 15 s, after which the car brings up its own access point:
