@@ -38,25 +38,24 @@ inline DriveModel driveModel(MotorDriver d) {
 // there, so V0 A3 replaces it with the tyre centres. The body is 119.5 mm wide
 // at the two rear pods only, and 84.5 mm wide through the middle.
 // d_L and d_R are the side-sensor stations from the rear axle, measured
-// 2026-11-02 with the mounts built. The left face sits 105 mm ahead of the rear
-// sensor, and that sensor is at the rear wall 45 mm behind the axle in the CAD,
-// so the left face is 60 mm ahead of the axle. The right face is 80 mm behind
-// the left, which puts it 20 mm behind the axle, so the faces are 80 mm apart
-// and that sum is the divisor the heading estimate divides by. d_R is the
-// magnitude behind the axle, not a signed station, because geom::pose adds the
-// two and a signed pair zeroes the divisor. V0 D1 and D2 recheck both stations
-// against the wheel centres, since the 45 mm is the only part still taken from
-// the CAD.
-// e_out is 0 until the finished faces are measured. The two faces are 95 mm
-// apart, which is not flush with the 119.5 mm widest point, and V0 D4 and D5
-// take the offsets from the built mounts.
+// 2026-11-02 against the rear wheel centre. The left face is 67 mm ahead of it
+// and the right face 147 mm ahead, so the right is the forward sensor and the
+// faces are 80 mm apart. The first tape, 105 mm from the left face to the rear
+// sensor, reads 87 mm from these two, so one of the three was taken to a
+// different point and the axle measurement is the one kept.
+// d_L is the left station ahead of the axle. d_R is the right station negated,
+// which is why it is negative here, and that keeps the divisor d_L + d_R equal
+// to the signed separation the sum divides by, 80 mm in magnitude. The pose
+// keeps its sign either way because the divisor and the sum flip together.
+// Both faces sit 95 mm apart across the car, so they are not flush with the
+// 119.5 mm widest point, and V0 D4 and D5 take e_out from the built mounts.
 // L_wb and t_front are axle and bore centres, not body dimensions.
 namespace car {
 constexpr float L_wb    = 0.183f;
 constexpr float t_front = 0.0905f;
 constexpr float L_car   = 0.234f;
-constexpr float d_L     = 0.060f;
-constexpr float d_R     = 0.020f;
+constexpr float d_L     = 0.067f;
+constexpr float d_R     = -0.147f;
 constexpr float e_out_L = 0.000f;
 constexpr float e_out_R = 0.000f;
 }

@@ -4,7 +4,7 @@
 
 #include "config.h"
 
-// Sensor-to-state geometry (PLAN.md section 4). The side readings are gL = W/2 + x + d_L*sin(psi) - e_L*cos(psi) and gR = W/2 - x + d_R*sin(psi) - e_R*cos(psi), so the difference carries the offset and the sum the heading, against a calibrated S0 and trim taken with the car squared up.
+// Sensor-to-state geometry (PLAN.md section 4). The side readings are gL = W/2 + x + d_L*sin(psi) - e_L*cos(psi) and gR = W/2 - x + d_R*sin(psi) - e_R*cos(psi), so the difference carries the offset and the sum the heading, against a calibrated S0 and trim taken with the car squared up. d_L and d_R are signed as config.h describes them, and d_L + d_R is the signed separation of the two faces, not a distance behind the axle.
 
 namespace geom {
 
@@ -24,9 +24,13 @@ struct Pose {
 inline Pose pose(const Config& c, float gL, float gR) {
   Pose p;
   if (!validRange(gL) || !validRange(gR)) return p;
-  if (car::d_L + car::d_R <= 0.0f) return p;
 
+  // The divisor is the signed separation, so a right face ahead of the left
+  // gives a negative sum. Only its magnitude has to be usable, because the sign
+  // cancels against the sum's own sign, and the heading keeps its meaning.
   const float dsum = car::d_L + car::d_R;
+  if (fabsf(dsum) < 0.005f) return p;
+
   const float psi = (gL + gR - c.S0) / dsum;
 
   // Undo the fore/aft asymmetry leaking into the offset, then the trim.
