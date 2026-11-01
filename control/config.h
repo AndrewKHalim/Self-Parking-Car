@@ -95,15 +95,27 @@ struct Config {
   // it and the value is held until V5.
   float d_stop    = 0.020f;
 
-  // Tolerances, bay target, correction budget and stroke timing. tol_off and
-  // tol_align are the pass criteria and stay until V5 has ten runs, and the
-  // parking spec replaces rear_target if it differs.
+  // Tolerances, bay target, correction budget and stroke timing. The bay is
+  // 300 wide and 450 deep, so 90 mm a side and 216 mm longer than the car. The
+  // box alone would allow about 50 mm of offset at this alignment tolerance,
+  // which is slack, so the sensor noise sets the tolerances and not the bay.
+  // tol_off and tol_align stay until V5 has ten runs.
+  // rear_target is a reading, and the rear sensor face sits 25 mm forward of
+  // the tail, so 0.063 with the 0.012 margin asks for 0.075 and leaves the tail
+  // 50 mm off the wall, 166 mm inside the mouth. The host sim stops at 0.097
+  // instead, because its plant brakes in 11 mm where 0.020 is assumed and the
+  // trigger is sampled every 33 ms, so treat 0.063 as the value until V0 C3
+  // measures the braking distance.
   float tol_off      = 0.010f;
   float tol_align    = 0.061f;
-  float rear_target  = 0.050f;
+  float rear_target  = 0.063f;
   float rear_margin  = 0.012f;
   int   dwell        = 3;
-  int   max_strokes  = 12;
+  // 24 strokes, not 12. The 80 mm baseline leaves the heading estimate noisy
+  // enough that the correction loop needs more than 12 to settle, and the
+  // 300 x 450 group spends a median of 8 and a worst case of 24 at 3 mm of gap
+  // noise. The typical run is unchanged, so this only lengthens the bad ones.
+  int   max_strokes  = 24;
   float stroke_dir   = 1.0f;
   float brake_settle = 0.15f;
   float stroke_timeout = 3.0f;
