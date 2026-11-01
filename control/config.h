@@ -67,13 +67,14 @@ struct Config {
 
   // The chassis carries the printed rack, pinion and two horns, so the front
   // wheels are not parallel, and V0 B3 confirms the two angles differ.
-  // motor_driver is the board being fitted. The pack is 3S Li-ion, 11.1 V
-  // nominal and 12.6 V full. The DRV8833 is rated to 10.8 V, the stock motor to
-  // 6 V, so the motor rail is bucked and motor_supply is the voltage at the
-  // driver. V0 A6 measures it at the VM pin.
+  // motor_driver is the board being fitted. The whole car runs on one 5 V rail,
+  // so motor_supply is 5.0 at the driver's VM pin and the stock 6 V motor sees
+  // about 4.5 V after the dropout. For the DRV8833 that cancels in driveScale
+  // and only the LM298 branch reads it, so it is not a speed knob. V0 A6
+  // measures the rail at the pin.
   SteerModel steer_model = SteerModel::ACKERMANN;
   MotorDriver motor_driver = MotorDriver::DRV8833;
-  float motor_supply = 6.0f;
+  float motor_supply = 5.0f;
 
   // Front wheel drag in a turn that is not steered to the Ackermann relation.
   float scrub_gain = 0.05f;
@@ -101,11 +102,13 @@ struct Config {
   // which is slack, so the sensor noise sets the tolerances and not the bay.
   // tol_off and tol_align stay until V5 has ten runs.
   // rear_target is a reading, and the rear sensor face sits 25 mm forward of
-  // the tail, so 0.063 with the 0.012 margin asks for 0.075 and leaves the tail
-  // 50 mm off the wall, 166 mm inside the mouth. The host sim stops at 0.097
-  // instead, because its plant brakes in 11 mm where 0.020 is assumed and the
-  // trigger is sampled every 33 ms, so treat 0.063 as the value until V0 C3
-  // measures the braking distance.
+  // the tail, which is the CAD's 45 mm rear overhang less the 20 mm you
+  // measured and is the weakest number here until the tail is taped. 0.063 with
+  // the 0.012 margin asks for 0.075 and leaves the tail 50 mm off the wall,
+  // 166 mm inside the mouth. The host sim stops at 0.097 instead, because its
+  // plant brakes in 11 mm where 0.020 is assumed and the trigger is sampled
+  // every 33 ms, so treat 0.063 as the value until V0 C3 measures the braking
+  // distance.
   float tol_off      = 0.010f;
   float tol_align    = 0.061f;
   float rear_target  = 0.063f;
