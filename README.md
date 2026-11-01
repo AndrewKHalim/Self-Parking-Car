@@ -14,7 +14,7 @@ The car uses VL53L0X time-of-flight sensors for autonomous reverse parking. The 
 | motor driver | DRV8833 module | a TB6612FNG also works and gives a clean sleep between runs |
 | drive motor | stock Tamiya yellow motor, 6V rated | |
 | chassis | Tamiya RC chassis with servo bay | the stock knuckle is turned by the drive motor through a plastic arm, so it cannot take a commanded angle and the chassis is converted to servo steering |
-| power | 3S Li-ion, 11.1 V nominal and 12.6 V full, plus a buck converter | the DRV8833 is rated to 10.8 V and the stock motor to 6 V, so VM must never be fed from the pack directly |
+| power | one 5 V rail for the whole car | the ESP32, the DRV8833 VM pin and the servo share it. The stock 6 V motor sees about 4.5 V at the driver's dropout, so the reverse duty has to be high enough for it to break away from rest. The DRV8833 is rated to 10.8 V, so VM must never be fed from a 3S pack directly |
 
 The three sensors are addressed over one I2C bus. Each one is enabled in turn through its XSHUT line and given an address: `0x29` left, `0x2A` right, `0x2B` rear.
 
@@ -69,6 +69,41 @@ curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
 .venv/bin/pio run            # build
 .venv/bin/pio run -t upload  # flash it, with the board connected
 ```
+
+#### Flash a prebuilt binary
+
+Tagged builds carry a ready-to-flash image at
+`https://github.com/AndrewKHalim/Self-Parking-Car/releases`, named
+`autoparking.factory.bin`. The same file sits in the tagged tree under
+`releases/`.
+
+Put the board in download mode: hold **BOOT**, tap **RESET**, release
+**BOOT**. It then enumerates as `/dev/ttyACM0` on Linux, `/dev/cu.usbmodem*` on
+macOS or `COMx` on Windows.
+
+```bash
+~/.platformio/penv/bin/esptool.py --chip esp32s3 --port /dev/ttyACM0 \
+    --baud 460800 write_flash 0x0 autoparking.factory.bin
+```
+
+`autoparking.factory.bin` is the bootloader, the partition table, the boot app
+and the application merged into one image, so it goes at `0x0` and nothing else
+is needed. Do not flash `firmware.bin` at `0x0`: that is the application alone
+and belongs at `0x10000`.
+
+The four separate images work too, if they are what you have:
+
+```bash
+~/.platformio/penv/bin/esptool.py --chip esp32s3 --port /dev/ttyACM0 \
+    --baud 460800 write_flash 0x0 bootloader.bin \
+    0x8000 partitions.bin 0xe000 boot_app0.bin 0x10000 firmware.bin
+```
+
+Check the write with `verify_flash 0x0 autoparking.factory.bin` in place of
+`write_flash`, or open the USB CDC console at 115200 and watch for the
+`autoparking-car: boot` line. After the reset the board takes about 15 s to
+give up on the configured network before its access point appears; see the next
+section.
 
 `lib/Network/src` is committed source with a hand-written `library.json` beside it, because Arduino core 3.3.12 ships `Network` without one and PlatformIO will not link it. Leave it as it is: a symlink into `~/.platformio/packages/` resolves on the machine that made it and nowhere else.
 

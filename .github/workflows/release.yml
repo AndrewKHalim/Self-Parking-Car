@@ -1,0 +1,24 @@
+name: release
+
+# A tag is the release. The binary is committed under releases/, so the runner
+# only has to publish it and does not build anything.
+on:
+  push:
+    tags: ["hw-*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Publish the factory image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" releases/autoparking.factory.bin \
+            --title "Hardware build $GITHUB_REF_NAME" \
+            --notes "Ready-to-flash image for the ESP32-S3 Super Mini. Write releases/autoparking.factory.bin at 0x0 with esptool; the command is in README.md section 2. Built from commit $GITHUB_SHA."
