@@ -2,8 +2,8 @@
 
 // The dashboard, as one self-contained page. No CDN, no framework, no webfont,
 // so every byte comes from the ESP32. The websocket reconnects on its own and
-// the page only shows the newest sample. There is no chart, because the cells
-// are the whole reading.
+// the page only shows the newest sample. There is no chart and no CSV, because
+// the cells are the whole state of a car that only reverses in a straight line.
 
 #include <Arduino.h>
 
@@ -40,26 +40,35 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(<!doctype html>
 <div id="link">connecting</div>
 
 <div class="grid">
-  <div class="cell"><span class="k">phase</span><span class="v" id="v-phase">-</span></div>
+  <div class="cell"><span class="k">state</span><span class="v" id="v-state">-</span></div>
   <div class="cell"><span class="k">gL</span><span class="v" id="v-gl">-</span></div>
   <div class="cell"><span class="k">gR</span><span class="v" id="v-gr">-</span></div>
   <div class="cell"><span class="k">rear</span><span class="v" id="v-rear">-</span></div>
   <div class="cell"><span class="k">servo</span><span class="v" id="v-servo">-</span></div>
-  <div class="cell"><span class="k">corrections</span><span class="v" id="v-corr">-</span></div>
+  <div class="cell"><span class="k">ready</span><span class="v" id="v-ready">-</span></div>
   <div class="cell"><span class="k">fault</span><span class="v" id="v-fault">-</span></div>
-  <div class="cell"><span class="k">t</span><span class="v" id="v-t">-</span></div>
 </div>
 
 <button id="start" disabled>start</button>
 
 <script>
-// The firmware sends integers. t in ms, the gaps in mm, servo in degrees. The
-// l, r and b flags say whether that channel had a fresh reading, because an
-// invalid sensor keeps its last value and the page must not present it as live.
+// The firmware sends raw millimetres. 8190 is no target, 65535 is a timeout,
+// and 0 to 29 is the part's minimum range, which means the face is at the wall
+// rather than 29 mm away.
+const NO_TARGET = 8190;
+const TIMEOUT = 65535;
+const WALL_MAX = 29;
+
 const byId = (id) => document.getElementById(id);
 const link = byId('link');
 const button = byId('start');
 let retry = 0;
+
+function mm(v) {
+  if (v === NO_TARGET || v === TIMEOUT) return 'none';
+  if (v <= WALL_MAX) return 'wall';
+  return v + ' mm';
+}
 
 function connect() {
   const scheme = location.protocol === 'https:' ? 'wss://' : 'ws://';
@@ -82,18 +91,17 @@ function connect() {
   };
 }
 
-// One message is one sample. The start button is only held down while the car
-// is already reversing or pulling, so it cannot ask for a second run.
+// One message is one sample. ready is the firmware's own gate, so the button is
+// only live where a start is accepted.
 function show(d) {
-  byId('v-phase').textContent = d.phase;
-  byId('v-gl').textContent = d.l ? d.gL + ' mm' : 'none';
-  byId('v-gr').textContent = d.r ? d.gR + ' mm' : 'none';
-  byId('v-rear').textContent = d.b ? d.rear + ' mm' : 'far';
+  byId('v-state').textContent = d.state;
+  byId('v-gl').textContent = mm(d.gL);
+  byId('v-gr').textContent = mm(d.gR);
+  byId('v-rear').textContent = mm(d.rear);
   byId('v-servo').textContent = d.servo + '\u00b0';
-  byId('v-corr').textContent = d.corr;
+  byId('v-ready').textContent = d.ready ? 'yes' : 'no';
   byId('v-fault').textContent = d.fault;
-  byId('v-t').textContent = (d.t / 1000).toFixed(1) + ' s';
-  button.disabled = d.phase === 'reverse' || d.phase === 'pull';
+  button.disabled = !d.ready;
 }
 
 button.addEventListener('click', () => {

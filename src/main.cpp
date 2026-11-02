@@ -1,12 +1,14 @@
-// The whole firmware. One loop at delay(25), one PID on the lateral error, one
-// small state machine, one serial line at 10 Hz and a dashboard. The network
-// side is the AsyncWebServer, which runs its own task on core 0 through
-// AsyncTCP. Nothing here owns a control task, a scheduler or a HAL.
+// Straight reverse, rear stop, side guard. There is no steering law.
 //
-// The maneuver is main's. Reverse until the rear reading reaches 76 mm. If the
-// gap difference is worth correcting, pull forward once with the wheels turned
-// 25 degrees against the larger gap, pause, and reverse again. Three
-// corrections at most, then park.
+// The two side faces give one number, gL - gR, for two unknowns, the lateral
+// offset and the yaw. At 5 degrees of yaw the heading term alone is 18.6 mm of
+// false offset, so a controller on that mixture has no unique set point. main
+// tried anyway and worked sometimes. This firmware keeps the wheels centred,
+// reverses in a straight line, stops on the rear sensor and refuses to move if
+// the side pair says the car is already against a wall.
+//
+// The states are IDLE, CHECK, REVERSE, BRAKE, PARKED and FAULT. One loop at
+// delay(25). The web server runs its own task on core 0 through AsyncTCP.
 
 #include <Arduino.h>
 #include <ESP32Servo.h>
@@ -15,61 +17,66 @@
 #include <Wire.h>
 
 #include <atomic>
-#include <cmath>
 #include <cstdio>
+#include <cstring>
 
-#include "DistanceSensorManager.h"
-#include "MotorController.h"
-#include "PIDController.h"
-#include "ParkingConfig.h"
+#include "config.h"
 #include "dashboard_html.h"
+#include "drive.h"
+#include "sensors.h"
 #include "wifi_config.h"
 
-DistanceSensorManager sensors;
-PIDController steerPid(pid::KP, pid::KI, pid::KD);
-MotorController motor;
+Sensors sensors;
+Drive motors;
 Servo steering;
 
-enum Phase : uint8_t {
-  PHASE_IDLE = 0,
-  PHASE_REVERSE,
-  PHASE_PULL,
-  PHASE_PARKED
+enum State : uint8_t {
+  STATE_IDLE = 0,
+  STATE_CHECK,
+  STATE_REVERSE,
+  STATE_BRAKE,
+  STATE_PARKED,
+  STATE_FAULT
 };
 
 enum Fault : uint8_t {
   FAULT_NONE = 0,
   FAULT_REAR,
-  FAULT_TIMEOUT
+  FAULT_SIDE
 };
 
-Phase phase = PHASE_IDLE;
-Fault fault = FAULT_NONE;
+State state_ = STATE_IDLE;
+Fault fault_ = FAULT_NONE;
+bool ready_ = false;
+bool startAfterCheck_ = false;
+unsigned long stateStart_ = 0;
+unsigned long lastLoop_ = 0;
+int rearInvalid_ = 0;
 
-// phaseStart times the current phase, legStart times the current reverse leg.
-// The 4 s cap is per reverse leg, so a pull forward gets a fresh clock.
-unsigned long phaseStart = 0;
-unsigned long legStart = 0;
-unsigned long lastLoop = 0;
-int pulls = 0;
-float lastGapMm = 0.0f;
-float pullGapMm = 0.0f;
+// The CHECK state samples one frame per loop and takes the median of five. One
+// frame per loop is enough because the part updates every 33 ms and the loop
+// runs at 25 ms, so five frames cover about four rangings.
+uint16_t framesL_[parking::CHECK_FRAMES];
+uint16_t framesR_[parking::CHECK_FRAMES];
+uint16_t framesRear_[parking::CHECK_FRAMES];
+int frameCount_ = 0;
 
 AsyncWebServer server(80);
 AsyncWebSocket socket("/ws");
-
-// The one word the page sets. The handler runs in the AsyncTCP task on core 0
-// and only flips this flag, so it never waits on the control loop.
 std::atomic<bool> startRequest{false};
 
-const char* phaseName(Phase p) {
-  switch (p) {
-  case PHASE_REVERSE:
+const char* stateName(State s) {
+  switch (s) {
+  case STATE_CHECK:
+    return "check";
+  case STATE_REVERSE:
     return "reverse";
-  case PHASE_PULL:
-    return "pull";
-  case PHASE_PARKED:
+  case STATE_BRAKE:
+    return "brake";
+  case STATE_PARKED:
     return "parked";
+  case STATE_FAULT:
+    return "fault";
   default:
     return "idle";
   }
@@ -79,48 +86,96 @@ const char* faultName(Fault f) {
   switch (f) {
   case FAULT_REAR:
     return "rear";
-  case FAULT_TIMEOUT:
-    return "timeout";
+  case FAULT_SIDE:
+    return "side";
   default:
     return "none";
   }
 }
 
-void enter(Phase next) {
-  phase = next;
-  phaseStart = millis();
-  if (next == PHASE_REVERSE) legStart = phaseStart;
+void enter(State next) {
+  state_ = next;
+  stateStart_ = millis();
+
+  // ready means the page may offer a start. It is true only where a start is
+  // accepted, so the button is dark for the whole of a run and in a fault.
+  ready_ = (next == STATE_IDLE || next == STATE_PARKED);
+
+  if (next == STATE_CHECK) {
+    frameCount_ = 0;
+    fault_ = FAULT_NONE;
+  }
+  if (next == STATE_REVERSE) rearInvalid_ = 0;
 }
 
-void beginRun() {
-  pulls = 0;
-  fault = FAULT_NONE;
-  lastGapMm = 0.0f;
-  pullGapMm = 0.0f;
-  steerPid.reset();
-  enter(PHASE_REVERSE);
+uint16_t median5(uint16_t* v) {
+  for (int i = 1; i < 5; ++i) {
+    const uint16_t key = v[i];
+    int j = i - 1;
+    while (j >= 0 && v[j] > key) {
+      v[j + 1] = v[j];
+      --j;
+    }
+    v[j + 1] = key;
+  }
+  return v[2];
 }
 
-// One JSON object per message, every field an integer. t is ms, the gaps and
-// the rear are mm, servo is degrees. The l, r and b flags say whether that
-// channel had a fresh reading, because an invalid sensor keeps its last value
-// and the page must not show it as live.
-void publish(const SensorReadings& r, uint32_t now, int servoDeg) {
+// One line per part and then a verdict, so a flashed board says which sensor is
+// dead before anything moves. The raw value is the code the part answered with,
+// 8190 for no target and 65535 for a timeout or a part that never came up.
+void printSelfTest() {
+  for (int i = 0; i < Sensors::COUNT; ++i) {
+    Serial.printf("part %-5s xshut=%2d addr=0x%02X init=%s raw=%u mm\n",
+                  Sensors::name(i), Sensors::xshutPin(i), Sensors::address(i),
+                  sensors.initOk(i) ? "ok" : "fail", sensors.bootRaw(i));
+  }
+
+  const uint16_t rear = sensors.bootRaw(0);
+  const uint16_t left = sensors.bootRaw(2);
+  const uint16_t right = sensors.bootRaw(1);
+  const bool rearVisible =
+      Sensors::fresh(rear) && rear >= sensor::REAR_VALID_MIN_MM &&
+      rear <= sensor::REAR_VALID_MAX_MM;
+  const bool sidesUsable = Sensors::fresh(left) && Sensors::fresh(right) &&
+                           left >= sensor::SIDE_GUARD_MM &&
+                           right >= sensor::SIDE_GUARD_MM;
+  Serial.printf("verdict rear=%s sides=%s\n",
+                rearVisible ? "visible" : "not visible",
+                sidesUsable ? "usable" : "not usable");
+}
+
+void printBootConfig() {
+  Serial.printf("pins i2c=%d/%d xshut=%d/%d/%d servo=%d motor=%d/%d/%d/%d\n",
+                board::PIN_I2C_SDA, board::PIN_I2C_SCL, board::PIN_XSHUT_L,
+                board::PIN_XSHUT_R, board::PIN_XSHUT_REAR, board::PIN_SERVO,
+                board::PIN_MOTOR_IN1, board::PIN_MOTOR_IN2,
+                board::PIN_MOTOR_B1, board::PIN_MOTOR_B2);
+  Serial.printf("drive pwm=%luHz/%ubit duty=%u/%u servo=%d..%d centre=%d\n",
+                (unsigned long)drive::PWM_HZ, (unsigned)drive::PWM_BITS,
+                (unsigned)drive::DUTY_REVERSE, (unsigned)drive::DUTY_FORWARD,
+                servo::MIN_DEG, servo::MAX_DEG, servo::CENTRE_DEG);
+  Serial.printf("times loop=%lums check=%d frames reverseMax=%lums "
+                "brake=%lums stop=%.0fmm guard=%umm\n",
+                timing::LOOP_MS, (int)parking::CHECK_FRAMES,
+                parking::REVERSE_MAX_MS, parking::BRAKE_MS,
+                parking::REAR_STOP_MM, sensor::SIDE_GUARD_MM);
+}
+
+// One JSON object, every field an integer or a name. The gaps and the rear are
+// raw millimetres, so 8190 and 65535 reach the page and it can say none.
+void publish(const Readings& r, unsigned long now) {
   if (socket.count() == 0) return;
 
-  static char line[288];
+  static char line[224];
   snprintf(line, sizeof(line),
-           "{\"t\":%lu,\"phase\":\"%s\",\"fault\":\"%s\",\"gL\":%ld,"
-           "\"gR\":%ld,\"rear\":%ld,\"servo\":%d,\"corr\":%d,"
-           "\"l\":%d,\"r\":%d,\"b\":%d}",
-           (unsigned long)now, phaseName(phase), faultName(fault),
-           lroundf(r.gL), lroundf(r.gR), lroundf(r.gRear), servoDeg, pulls,
-           (int)r.leftValid, (int)r.rightValid, (int)r.rearValid);
+           "{\"t\":%lu,\"state\":\"%s\",\"fault\":\"%s\",\"gL\":%u,\"gR\":%u,"
+           "\"rear\":%u,\"servo\":%d,\"ready\":%d}",
+           now, stateName(state_), faultName(fault_), r.gL, r.gR, r.rear,
+           servo::CENTRE_DEG, (int)ready_);
   socket.textAll(line);
 }
 
-// Join the configured network or fall back to an access point, so the page is
-// reachable on a bench where that network is not there.
 void connectNetwork() {
   WiFi.setHostname(HOSTNAME);
   WiFi.mode(WIFI_STA);
@@ -147,37 +202,6 @@ void connectNetwork() {
                 WiFi.softAPIP().toString().c_str());
 }
 
-// One boot line names every value that decides a move, then one raw reading
-// from each sensor, so a dead part is obvious before anything moves.
-void printBootLine(const SensorReadings& boot, bool sensorsOk) {
-  Serial.printf("pins sda=%d scl=%d xshutL=%d xshutR=%d xshutRear=%d "
-                "servo=%d in1=%d in2=%d b1=%d b2=%d\n",
-                board::PIN_I2C_SDA, board::PIN_I2C_SCL, board::PIN_XSHUT_L,
-                board::PIN_XSHUT_R, board::PIN_XSHUT_REAR, board::PIN_SERVO,
-                board::PIN_MOTOR_IN1, board::PIN_MOTOR_IN2,
-                board::PIN_MOTOR_B1, board::PIN_MOTOR_B2);
-  Serial.printf("addr left=0x%02X right=0x%02X rear=0x%02X budget=%lums "
-                "period=%lums\n",
-                board::ADDR_LEFT, board::ADDR_RIGHT, board::ADDR_REAR,
-                (unsigned long)(sensor::BUDGET_US / 1000),
-                (unsigned long)sensor::PERIOD_MS);
-  Serial.printf("drive pwm=%luHz/%ubit reverse=%u forward=%u\n",
-                (unsigned long)drive::PWM_HZ, (unsigned)drive::PWM_BITS,
-                (unsigned)drive::DUTY_REVERSE, (unsigned)drive::DUTY_FORWARD);
-  Serial.printf("times loop=%lums log=%lums pull=%lums pause=%lums "
-                "reverseMax=%lums\n",
-                timing::LOOP_MS, timing::LOG_MS, parking::PULL_FORWARD_MS,
-                parking::PAUSE_MS, parking::REVERSE_MAX_MS);
-  Serial.printf("pid kp=%.2f ki=%.2f kd=%.2f deadband=%.0fmm stop=%.0fmm "
-                "gap=%.0fmm steer=%.0fdeg pulls=%d\n",
-                pid::KP, pid::KI, pid::KD, pid::DEADBAND_CM * 10.0f,
-                parking::REAR_STOP_MM, parking::PULL_GAP_MM,
-                parking::PULL_STEER_DEG, parking::MAX_PULLS);
-  Serial.printf("raw left=%u right=%u rear=%u mm, sensorInit=%s\n",
-                boot.rawL, boot.rawR, boot.rawRear,
-                sensorsOk ? "ok" : "failed");
-}
-
 void setup() {
   Serial.begin(115200);
   const unsigned long waitStart = millis();
@@ -187,23 +211,21 @@ void setup() {
   delay(200);
 
   Serial.println();
-  Serial.println("autoparking-car: simple");
-  Serial.println("one loop, one PID, one maneuver, a dashboard");
+  Serial.println("autoparking-car: straight reverse, rear stop, side guard");
+  printBootConfig();
 
   Wire.begin(board::PIN_I2C_SDA, board::PIN_I2C_SCL);
   Wire.setClock(400000);
 
-  // The library default pulse map is 544 to 2400 us over 0 to 180 degrees ---
   steering.attach(board::PIN_SERVO);
   steering.write(servo::CENTRE_DEG);
-  // end
 
-  motor.begin();
+  motors.begin();
 
-  const bool sensorsOk = sensors.begin();
+  sensors.begin();
   delay(timing::SENSOR_SETTLE_MS);
-  const SensorReadings boot = sensors.read();
-  printBootLine(boot, sensorsOk);
+  sensors.probe();
+  printSelfTest();
 
   connectNetwork();
 
@@ -216,150 +238,138 @@ void setup() {
     req->send(200, "application/json", "{\"start\":true}");
   });
 
-  socket.onEvent([](AsyncWebSocket* srv, AsyncWebSocketClient* client,
-                    AwsEventType type, void* arg, uint8_t* data, size_t len) {
-    if (type == WS_EVT_CONNECT) {
-      Serial.printf("ws client %lu connected\n",
-                    (unsigned long)client->id());
-    }
-  });
-
   server.addHandler(&socket);
   server.begin();
 
-  enter(PHASE_IDLE);
-  lastLoop = millis();
-  Serial.println("idle, press start on the page");
+  // The boot check validates the sensors before the page offers a start. It
+  // ends in IDLE rather than REVERSE, so only a press moves the car.
+  startAfterCheck_ = false;
+  enter(STATE_CHECK);
+  lastLoop_ = millis();
+  Serial.println("checking sensors");
 }
 
 void loop() {
   const unsigned long now = millis();
-  float dt = (now - lastLoop) / 1000.0f;
-  if (dt <= 0.001f) dt = timing::LOOP_MS / 1000.0f;
-  lastLoop = now;
+  lastLoop_ = now;
 
-  const SensorReadings r = sensors.read();
+  const Readings r = sensors.read();
 
-  // main's signal is the gap difference. A side dropout holds the last valid
-  // gap rather than inventing a nominal clearance nobody measured ---
-  if (r.leftValid && r.rightValid) lastGapMm = r.gL - r.gR;
-  const float gapMm = lastGapMm;
-  // end
-
-  // A start is accepted from idle or parked. A press while the car is moving
-  // is dropped, so the button cannot restart a run in progress ---
   if (startRequest.exchange(false)) {
-    if (phase == PHASE_IDLE || phase == PHASE_PARKED) beginRun();
+    if (state_ == STATE_IDLE || state_ == STATE_PARKED) {
+      startAfterCheck_ = true;
+      enter(STATE_CHECK);
+    }
   }
-  // end
 
-  int servoAngle = servo::CENTRE_DEG;
-
-  switch (phase) {
-  case PHASE_IDLE:
-    motor.stop();
+  switch (state_) {
+  case STATE_IDLE:
+    motors.brake();
     steering.write(servo::CENTRE_DEG);
     break;
 
-  case PHASE_REVERSE: {
-    // A held rear reading cannot fire the stop, only a fresh one under 76 mm ---
-    const bool rearArrived = r.rearValid && r.gRear <= parking::REAR_STOP_MM;
-    // end
-
-    if (rearArrived) {
-      motor.stop();
-      steering.write(servo::CENTRE_DEG);
-      servoAngle = servo::CENTRE_DEG;
-
-      // A gap worth correcting while the car is close buys one pull forward.
-      // Once three are spent the car parks rather than hunting for a wall.
-      const bool misaligned = fabsf(gapMm) > parking::PULL_GAP_MM;
-      const bool stillClose = r.gRear < parking::PULL_REAR_MAX_MM;
-      // end
-
-      if (misaligned && stillClose && pulls < parking::MAX_PULLS) {
-        ++pulls;
-        pullGapMm = gapMm;
-        enter(PHASE_PULL);
-      } else {
-        enter(PHASE_PARKED);
-      }
-      break;
+  case STATE_CHECK: {
+    if (frameCount_ < parking::CHECK_FRAMES) {
+      framesL_[frameCount_] = r.gL;
+      framesR_[frameCount_] = r.gR;
+      framesRear_[frameCount_] = r.rear;
+      ++frameCount_;
     }
-
-    // The cap is a safety, not a distance. A dead rear part names its raw value ---
-    if (now - legStart >= parking::REVERSE_MAX_MS) {
-      motor.stop();
-      steering.write(servo::CENTRE_DEG);
-      servoAngle = servo::CENTRE_DEG;
-      if (!r.rearValid) {
-        fault = FAULT_REAR;
-        Serial.printf("fault=rear raw=%u mm, stopped after %lu ms\n", r.rawRear,
-                      now - legStart);
-      } else {
-        fault = FAULT_TIMEOUT;
-        Serial.printf("fault=timeout rear=%.0f mm, stopped after %lu ms\n",
-                      r.gRear, now - legStart);
-      }
-      enter(PHASE_PARKED);
-      break;
-    }
-    // end
-
-    const float offset = steerPid.compute(gapMm / 10.0f, dt);
-    servoAngle = PIDController::toServoAngle(offset);
-    steering.write(servoAngle);
-    motor.reverse(drive::DUTY_REVERSE);
-    break;
-  }
-
-  case PHASE_PULL: {
-    // main's counter-steer, 25 degrees opposite the larger gap ---
-    const float counterDeg =
-        (pullGapMm > 0.0f) ? -parking::PULL_STEER_DEG : parking::PULL_STEER_DEG;
-    servoAngle = PIDController::toServoAngle(counterDeg);
-    steering.write(servoAngle);
-    // end
-    motor.forward(drive::DUTY_FORWARD);
-
-    // The pull ends on time or as soon as the rear has room again. The pause is
-    // main's, so the gear change does not land while the car rolls forward ---
-    const bool timedOut = now - phaseStart >= parking::PULL_FORWARD_MS;
-    const bool cleared = r.rearValid && r.gRear > parking::PULL_EXIT_MM;
-    // end
-
-    if (timedOut || cleared) {
-      motor.stop();
-      steering.write(servo::CENTRE_DEG);
-      servoAngle = servo::CENTRE_DEG;
-      steerPid.reset();
-      delay(parking::PAUSE_MS);
-      enter(PHASE_REVERSE);
-    }
-    break;
-  }
-
-  case PHASE_PARKED:
-    motor.stop();
+    motors.brake();
     steering.write(servo::CENTRE_DEG);
-    servoAngle = servo::CENTRE_DEG;
+    if (frameCount_ < parking::CHECK_FRAMES) break;
+
+    const uint16_t mL = median5(framesL_);
+    const uint16_t mR = median5(framesR_);
+    const uint16_t mRear = median5(framesRear_);
+    const bool rearOk = Sensors::fresh(mRear) &&
+                        mRear >= sensor::REAR_VALID_MIN_MM &&
+                        mRear <= sensor::REAR_VALID_MAX_MM;
+    const bool sidesOk = Sensors::fresh(mL) && Sensors::fresh(mR) &&
+                         mL >= sensor::SIDE_GUARD_MM &&
+                         mR >= sensor::SIDE_GUARD_MM;
+    if (!rearOk || !sidesOk) {
+      fault_ = rearOk ? FAULT_SIDE : FAULT_REAR;
+      Serial.printf("check failed rear=%u left=%u right=%u fault=%s\n", mRear,
+                    mL, mR, faultName(fault_));
+      enter(STATE_FAULT);
+      break;
+    }
+    if (startAfterCheck_) {
+      enter(STATE_REVERSE);
+    } else {
+      enter(STATE_IDLE);
+    }
     break;
   }
 
-  // One line at 10 Hz, and the same snapshot to the page. Units are in the
-  // field names because a serial capture has no caption ---
+  case STATE_REVERSE: {
+    // The stop is a fresh rear reading at or under 90 mm. A fresh 0 to 29 mm is
+    // inside that window and means the face is at the wall, so it stops too.
+    const bool freshRear = Sensors::fresh(r.rear);
+    const bool sideClose =
+        (Sensors::fresh(r.gL) && r.gL < sensor::SIDE_GUARD_MM) ||
+        (Sensors::fresh(r.gR) && r.gR < sensor::SIDE_GUARD_MM);
+
+    if (freshRear &&
+        (r.rear <= parking::REAR_STOP_MM || Sensors::atWall(r.rear))) {
+      enter(STATE_BRAKE);
+      break;
+    }
+    if (sideClose) {
+      fault_ = FAULT_SIDE;
+      enter(STATE_BRAKE);
+      break;
+    }
+    if (!freshRear) {
+      if (++rearInvalid_ >= parking::REAR_INVALID_LIMIT) {
+        fault_ = FAULT_REAR;
+        enter(STATE_BRAKE);
+        break;
+      }
+    } else {
+      rearInvalid_ = 0;
+    }
+    if (now - stateStart_ >= parking::REVERSE_MAX_MS) {
+      enter(STATE_BRAKE);
+      break;
+    }
+
+    steering.write(servo::CENTRE_DEG);
+    motors.reverse(drive::DUTY_REVERSE);
+    break;
+  }
+
+  case STATE_BRAKE:
+    motors.brake();
+    steering.write(servo::CENTRE_DEG);
+    if (now - stateStart_ >= parking::BRAKE_MS) {
+      enter(fault_ == FAULT_NONE ? STATE_PARKED : STATE_FAULT);
+    }
+    break;
+
+  case STATE_PARKED:
+    motors.brake();
+    steering.write(servo::CENTRE_DEG);
+    break;
+
+  case STATE_FAULT:
+    motors.brake();
+    steering.write(servo::CENTRE_DEG);
+    break;
+  }
+
   static unsigned long lastReport = 0;
   const unsigned long t = millis();
   if (t - lastReport >= timing::LOG_MS) {
     lastReport = t;
-    Serial.printf("%8lu phase=%s gL=%.0f gR=%.0f rear=%.0f servo=%d corr=%d "
+    Serial.printf("t=%lu state=%s gL=%u gR=%u rear=%u servo=%d ready=%d "
                   "fault=%s\n",
-                  t, phaseName(phase), r.gL, r.gR, r.gRear, servoAngle, pulls,
-                  faultName(fault));
-    publish(r, t, servoAngle);
+                  t, stateName(state_), r.gL, r.gR, r.rear,
+                  servo::CENTRE_DEG, (int)ready_, faultName(fault_));
+    publish(r, t);
     socket.cleanupClients();
   }
-  // end
 
   delay(timing::LOOP_MS);
 }

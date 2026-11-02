@@ -14,7 +14,7 @@
 
 #include <Arduino.h>
 
-#include "ParkingConfig.h"
+#include "config.h"
 
 constexpr int PIN = board::PIN_SERVO;
 constexpr uint32_t LEDC_HZ = 50;
