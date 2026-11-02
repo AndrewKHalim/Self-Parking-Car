@@ -4,10 +4,14 @@
 
 #include "ParkingConfig.h"
 
-// The DRV8833 on four pins, one channel per side. Every write is analogWrite,
-// including the zero leg, because the first PWM on a pin hands it to the LEDC
-// peripheral and a later digitalWrite does nothing. Stop therefore writes zero
-// to all four pins and puts both channels in the gentle brake.
+// The DRV8833 on four pins, one channel per side. The PWM runs on the LEDC
+// peripheral at 20 kHz and 8 bits rather than the analogWrite default of 1 kHz,
+// because 1 kHz is an audible whine. See drive::PWM_HZ in ParkingConfig.h for
+// why 20 kHz is safe for this driver.
+//
+// Both inputs low is coast on the DRV8833, so stop means the motor turns off
+// rather than brakes. Only the driven input carries the duty and the other one
+// stays at zero, which is fast decay on this part.
 
 enum MotorDirection {
   MOTOR_STOPPED = 0,
@@ -35,10 +39,14 @@ private:
 };
 
 inline void MotorController::begin() {
-  pinMode(board::PIN_MOTOR_IN1, OUTPUT);
-  pinMode(board::PIN_MOTOR_IN2, OUTPUT);
-  pinMode(board::PIN_MOTOR_B1, OUTPUT);
-  pinMode(board::PIN_MOTOR_B2, OUTPUT);
+  const int pins[] = {board::PIN_MOTOR_IN1, board::PIN_MOTOR_IN2,
+                      board::PIN_MOTOR_B1, board::PIN_MOTOR_B2};
+  for (int p : pins) {
+    if (!ledcAttach(p, drive::PWM_HZ, drive::PWM_BITS)) {
+      Serial.printf("ledc attach failed on gpio %d\n", p);
+    }
+    ledcWrite(p, 0);
+  }
   stop();
 }
 
@@ -63,10 +71,10 @@ inline void MotorController::reverse(uint8_t duty) {
 inline void MotorController::stop() {
   speed_ = 0;
   direction_ = MOTOR_STOPPED;
-  analogWrite(board::PIN_MOTOR_IN1, 0);
-  analogWrite(board::PIN_MOTOR_IN2, 0);
-  analogWrite(board::PIN_MOTOR_B1, 0);
-  analogWrite(board::PIN_MOTOR_B2, 0);
+  ledcWrite(board::PIN_MOTOR_IN1, 0);
+  ledcWrite(board::PIN_MOTOR_IN2, 0);
+  ledcWrite(board::PIN_MOTOR_B1, 0);
+  ledcWrite(board::PIN_MOTOR_B2, 0);
 }
 
 inline const char* MotorController::getDirectionString() const {
@@ -80,27 +88,24 @@ inline const char* MotorController::getDirectionString() const {
   }
 }
 
-// One DRV8833 channel.
+// One DRV8833 channel. A direction of zero is the coast the rear limit wants,
+// with both inputs low.
 inline void MotorController::driveChannel(int inA, int inB, int dir,
                                           uint8_t duty, bool invert) {
-  // A direction of zero is the brake the rear limit wants, with both inputs
-  // low.
   if (dir == 0) {
-    analogWrite(inA, 0);
-    analogWrite(inB, 0);
+    ledcWrite(inA, 0);
+    ledcWrite(inB, 0);
     return;
   }
-  // end
 
   // The inversion flag is the whole difference between the two mirrored
-  // motors. Only the driven leg gets the duty and the other stays at zero.
+  // motors. Only the driven leg gets the duty.
   const bool forward = (dir > 0) != invert;
   if (forward) {
-    analogWrite(inA, duty);
-    analogWrite(inB, 0);
+    ledcWrite(inA, duty);
+    ledcWrite(inB, 0);
   } else {
-    analogWrite(inA, 0);
-    analogWrite(inB, duty);
+    ledcWrite(inA, 0);
+    ledcWrite(inB, duty);
   }
-  // end
 }

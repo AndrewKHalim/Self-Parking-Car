@@ -1,10 +1,10 @@
 name: release
 
-# A tag is the release. The binaries are committed under releases/, so the
-# runner only has to publish them and does not build anything.
+# A tag is the release. The binary is committed under releases/, so the runner
+# only has to publish it and does not build anything.
 on:
   push:
-    tags: ["hw-*", "bench-*"]
+    tags: ["hw-*"]
 
 permissions:
   contents: write
@@ -15,10 +15,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Publish the factory images
+      # The asset list is explicit on purpose. The tree also carries the bench
+      # images, and a release must ship exactly one file, the application
+      # factory image, so nothing here globs releases/.
+      - name: Publish the factory image
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" releases/*.bin \
+          gh release create "$GITHUB_REF_NAME" releases/autoparking.factory.bin \
             --title "Build $GITHUB_REF_NAME" \
-            --notes "Ready-to-flash images for the ESP32-S3 Super Mini, both written at 0x0 with esptool. autoparking.factory.bin is the parking firmware, motor_test.factory.bin is the bench drive copy that moves the car as soon as it is powered. Built from commit $GITHUB_SHA."
+            --notes "Ready-to-flash image for the ESP32-S3 Super Mini, written at 0x0 with esptool. autoparking.factory.bin is the parking firmware: one loop, one PID on the lateral gap difference, reverse at duty 200 to 76 mm, and up to three 1400 ms pull-forward corrections at 25 degrees, with the dashboard on the board. Built from commit $GITHUB_SHA."
