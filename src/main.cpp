@@ -407,6 +407,17 @@ void loop() {
     }
 
     if (calCount_ >= parking::CALIBRATE_FRAMES) {
+      // A run only starts reversing on a rear frame that came back this
+      // instant. The gate is freshness alone, because a rear channel that
+      // reads no target or a timeout has nothing to stop the car with.
+      // end
+      if (!Sensors::fresh(r.rear)) {
+        fault_ = FAULT_REAR;
+        Serial.printf("reverse gate rear=%u fault=%s\n", r.rear,
+                      faultName(fault_));
+        enter(STATE_FAULT);
+        break;
+      }
       s0_ = calSum_ / (calCount_ * 1000.0f);
       // x0 is the offset the car entered with. It is printed for the owner and
       // is not subtracted from anything, because the loop has to centre the
@@ -430,17 +441,18 @@ void loop() {
   }
 
   case STATE_REVERSE: {
-    // The stop is the filtered rear at or under 90 mm. The wall test uses the
-    // raw frame, because 0 to 29 mm is unambiguous and must not wait for the
-    // filter. The guard also uses raw, since it aborts rather than steers.
+    // The stop is the raw rear frame at or under 90 mm. The filter trails two
+    // or three samples at EPA 0.35 and three blocking reads make a loop about
+    // 100 ms, so the filtered value is still near 90 mm when the tail is at the
+    // wall. The filtered value stays as a secondary, never as the only test.
     // end
     const bool freshRear = Sensors::fresh(r.rear);
     const bool sideClose =
         (Sensors::fresh(r.gL) && r.gL < sensor::SIDE_GUARD_MM) ||
         (Sensors::fresh(r.gR) && r.gR < sensor::SIDE_GUARD_MM);
 
-    if (freshRear && (rearF_ <= parking::REAR_STOP_MM ||
-                      Sensors::atWall(r.rear))) {
+    if (freshRear && (r.rear <= parking::REAR_STOP_MM ||
+                      rearF_ <= parking::REAR_STOP_MM)) {
       enter(STATE_BRAKE);
       break;
     }
@@ -506,10 +518,11 @@ void loop() {
   if (t - lastReport >= timing::LOG_MS) {
     lastReport = t;
     Serial.printf("t=%lu state=%s x=%.1fmm psi=%.4frad psiRef=%.4frad "
-                  "servo=%d gL=%.1f gR=%.1f rear=%.1f ready=%d fault=%s\n",
+                  "servo=%d gL=%.1f gR=%.1f rear=%.1f raw=%u ready=%d "
+                  "fault=%s\n",
                   t, stateName(state_), pose_.x * 1000.0f, pose_.psi,
                   steerOut_.psiRef, steerOut_.servoDeg, gLf_, gRf_, rearF_,
-                  (int)ready_, faultName(fault_));
+                  r.rear, (int)ready_, faultName(fault_));
     publish(t);
     socket.cleanupClients();
   }

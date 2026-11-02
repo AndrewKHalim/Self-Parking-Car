@@ -266,7 +266,7 @@ One loop at `delay(25)`. The states are `idle`, `check`, `calibrate`,
 | `idle` | brakes, wheels centred, resets the integral, accepts a start |
 | `check` | takes five frames, medians each channel, and refuses the run unless the rear is fresh and 30 to 800 mm and both sides are fresh and at least 25 mm |
 | `calibrate` | motors off, wheels centred, averages 32 valid side pairs into `S0` and prints `x0` |
-| `reverse` | brakes released, both motors reverse at duty 200, cascade steers |
+| `reverse` | brakes released, both motors reverse at duty 200, cascade steers, stops on the raw rear frame at or under 90 mm |
 | `brake` | both motor inputs high for 300 ms, so the car is held |
 | `parked` | brake held, wheels centred, accepts a start |
 | `fault` | brake held, latched until power cycle |
@@ -278,11 +278,20 @@ cannot hold the run there.
 
 `reverse` ends four ways:
 
-- a fresh rear reading at or under 90 mm, which brakes and parks;
+- a fresh raw rear frame at or under 90 mm, which brakes and parks;
 - a fresh side reading under 25 mm, which brakes and faults;
 - two consecutive rear frames that are neither 8190 nor 65535, which brakes
   and faults as `rear`;
 - 3000 ms without one of the above, which brakes and faults as `timeout`.
+
+The stop test runs on the raw rear frame, not on the filtered value. The filter
+trails the car by two or three samples and three blocking reads make a loop
+about 100 ms, so at duty 200 the filtered number is still near 90 mm when the
+gap is already at the wall. The filtered value is kept as a secondary test.
+
+`calibrate` hands over to `reverse` only on a rear frame that came back fresh in
+that same loop pass. A run with nothing to stop on faults as `rear` before the
+motors move.
 
 The cap is a give-up, not a wall. A run that ran out of time shows
 `fault=timeout` on the serial line and the page, so it cannot be mistaken for a
@@ -326,8 +335,11 @@ leave you guessing which sensor is dead.
 The serial line prints at 10 Hz:
 
 ```
-t=1234 state=reverse x=-6.2mm psi=0.0131rad psiRef=-0.0248rad servo=86 gL=210.4 gR=198.1 rear=340.0 ready=0 fault=none
+t=1234 state=reverse x=-6.2mm psi=0.0131rad psiRef=-0.0248rad servo=86 gL=210.4 gR=198.1 rear=340.0 raw=352 ready=0 fault=none
 ```
+
+`rear` is the filtered value the cascade sees and `raw` is the frame the stop
+test compares, so a log from a run says which of the two crossed 90 mm first.
 
 The ESP32 joins the network in `src/wifi_config.h`. If it cannot join within
 15 seconds it starts its own access point, `autoparking` with password
@@ -342,8 +354,13 @@ The ESP32 joins the network in `src/wifi_config.h`. If it cannot join within
 The page shows state, `x` in millimetres, `psi` in degrees, the servo command
 in degrees, the filtered gaps, the rear, ready and fault, and has a start button
 that is disabled while `ready` is false. 8190 and 65535 show as `none`, and 0 to
-29 shows as `wall`. There is no chart and no CSV. The JSON carries `x` in
-millimetres, `psi` and `psiRef` in milliradians and the servo in degrees.
+29 shows as `wall`. Under the cells it plots x, psi, the rear and the servo
+against time, four bands over the last 600 samples, which is one minute at the
+10 Hz socket. The history is a ring in the page, so the plots cost the control
+loop nothing, and 8190 and 65535 are drawn as gaps instead of as eight or
+sixty-five metres. The rear band carries the 90 mm stop line. There is no CSV.
+The JSON carries `x` in millimetres, `psi` and `psiRef` in milliradians and the
+servo in degrees.
 
 ## The layout
 
@@ -362,17 +379,20 @@ millimetres, `psi` and `psiRef` in milliradians and the servo in degrees.
 
 ## Status
 
-Build-verified only. Nothing on this branch has been flashed or run on the car.
+`hw-2026-11-03.2` was flashed and driven by the owner. The car reversed at duty
+200 and stopped at the wall rather than at 90 mm, which is the defect this image
+fixes, and the page showed the rear sensor's numbers live through the run. This
+image, `hw-2026-11-03.3`, is build-verified only and has not been flashed.
 
 The firmware builds and links for the ESP32-S3 Super Mini at 48,220 bytes of RAM
-(14.7 percent of 327,680) and 997,562 bytes of flash. The application partition
-is the 4,063,232-byte `app0` from `max_app_4MB.csv`, so the app uses 24.5
-percent of it. PlatformIO prints 11.9 percent because it divides by the board's
+(14.7 percent of 327,680) and 1,004,482 bytes of flash. The application partition
+is the 4,063,232-byte `app0` from `max_app_4MB.csv`, so the app uses 24.7
+percent of it. PlatformIO prints 12.0 percent because it divides by the board's
 8 MB `maximum_size`, which is not the figure to quote. The
-`releases/autoparking.factory.bin` built from this tree is 1,079,232 bytes, sha256
-`6721407198d49d2c24b4da144ce19fe9bd8155171eb7d0dd7d35e662c231878c`.
+`releases/autoparking.factory.bin` built from this tree is 1,086,144 bytes, sha256
+`0813af8b8444969b654b0bda02fee52b3226457c60254321cefcd963089935b3`.
 
-The four bench environments build. The servo, sensor and drive behaviour is not
-observed on hardware in this branch. Duty 200 is the only duty ever seen to move
-this car, and only forward on the bench. The rear sensor has never been read out
-on its own. No run has completed.
+The four bench environments build. Duty 200 drives this car in reverse as well
+as forward, which the `hw-2026-11-03.2` run showed. The steering linkage, the
+servo centre and the 90 mm stopping distance are still unmeasured, and no run
+has completed.
