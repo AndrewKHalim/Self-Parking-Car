@@ -2,8 +2,10 @@
 
 #include <cstdint>
 
-// The hardware the control code talks to. The same controller builds against the ESP32 HAL and the host simulator, so analysis cannot drift from firmware.
-
+// The hardware interface the control code talks to. src/esp32_hal.h is the only
+// implementation. The seam is kept because it keeps the control core free of
+// Arduino and the build honest: the supervisor compiles against this header
+// alone, so a hardware call cannot creep into the maneuver by accident.
 struct Hal {
   virtual ~Hal() = default;
 

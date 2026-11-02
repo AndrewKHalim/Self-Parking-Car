@@ -1,8 +1,8 @@
 # Self-parking-car
 
-A small RC car reverses into a perpendicular parking bay, lines itself up with the bay walls and stops before the rear obstacle. The steering is closed loop, the step response is logged by a host rig, and a web dashboard shows the live state and a graph.
+A small RC car reverses into a perpendicular parking bay and stops before the rear obstacle. The maneuver is fixed time and fixed duty: reverse with the wheels centred until the rear sensor reads 70 mm, then pull forward and back at opposite locks, up to three times. The firmware closes no steering loop. A web dashboard shows the live state, and the serial line names every duty and time at boot and the fault when a run gives up.
 
-The car uses VL53L0X time-of-flight sensors for autonomous reverse parking. The steering is described as Ackermann, and the control code runs either kind of steering until someone measures the chassis.
+The car uses three VL53L0X time-of-flight sensors. The two side sensors are telemetry only, and the rear sensor is the one that ends the reverse leg.
 
 ## The hardware
 
@@ -145,11 +145,11 @@ The firmware joins the network named in `src/wifi_config.h`: put the SSID and th
 |---|---|---|
 | `autoparking` | `autoparking` | `http://192.168.4.1/` |
 
-The page shows the live state and a chart of the last 1200 samples, and the button asks the control task to start a run. The readout cells are t, x, psi, the left and right side gaps, the rear gap, the servo command, the phase, the correction count and the calibration flag. The chart carries three labelled series against time in seconds, x in mm, psi in degrees and the servo in degrees, each on a fixed axis. The page seeds itself from `/log.csv` on load and on every reconnect, so a reload does not lose the run, and the board holds 34 s of it. Telemetry goes to the page over a WebSocket at `/ws`, about ten messages a second.
+The page shows the live state and a chart of the last 1200 samples, and the button asks the control task to start a run. The readout cells are t, the left and right side gaps, the rear gap, the servo command, the phase, the fault and the correction count. The chart carries one labelled series against time in seconds, the servo in degrees on a fixed axis. The pose cells are gone with the pose. The page seeds itself from `/log.csv` on load and on every reconnect, so a reload does not lose the run, and the board holds 34 s of it. Telemetry goes to the page over a WebSocket at `/ws`, about ten messages a second.
 
 ### 4. The host simulator
 
-Removed with the steering core on 2026-11-02. The commands below are kept as a record. `tools/sim_main.cpp` still includes `control/control.h` and `control/ackermann.h`, which no longer exist, so neither it nor `tools/step_rig.cpp` builds against this tree. `tools/geom_checks.cpp` covers the geometry that is still here, and `control/config.h` is unchanged in the parts it checks, but the owner has the car now and the host simulator is not part of the build.
+Removed with the steering core on 2026-11-02. The commands below are kept as a record. `control/geometry.h` was deleted on 2026-11-02 with the pose, so `tools/geom_checks.cpp` no longer compiles either, and `tools/sim_main.cpp` and `tools/step_rig.cpp` still target the removed steering core. The owner has the car now and the host simulator is not part of the build.
 
 ```bash
 mkdir -p build
@@ -255,54 +255,50 @@ The endpoints:
 
 The page is reachable on the configured network, or over the `autoparking` access point at `192.168.4.1`. The SSID, the password and the fallback are in `src/wifi_config.h`.
 
-Telemetry crosses from the control task to the web task through a one-deep queue written with `xQueueOverwrite`, so a slow socket can never hold up the control loop: the web task either gets the newest tick or nothing at all. The JSON carries the numeric fields as integers, t in ms, distances in mm, angles in milliradians and the servo in whole degrees. Phase is a string, and the stroke field is always "none" until a maneuver uses it again. The web task drains the queue every 100 ms and sends, which is 10 Hz. The start request crosses the other way as a `std::atomic<bool>`, set by `/start` and cleared by the control task, which ignores it mid-run and retakes the calibration on every accepted request.
+Telemetry crosses from the control task to the web task through a one-deep queue written with `xQueueOverwrite`, so a slow socket can never hold up the control loop: the web task either gets the newest tick or nothing at all. The JSON carries the numeric fields as integers, t in ms, distances in mm and the servo in whole degrees. Phase and fault are strings. `x` and `psi` stay in the object at zero because the pose is gone, and no decision reads them. The web task drains the queue every 100 ms and sends, which is 10 Hz. The start request crosses the other way as a `std::atomic<bool>`, set by `/start` and cleared by the control task, which always begins a run on the next tick.
 
-The control task also prints one line at 10 Hz while it runs, every third tick: the phase and a fixed NONE in the stroke column, then x, psi, rear, gL and gR, the servo command, cal, ok and the correction count. So a bench check does not need a phone joined to the access point.
+The control task also prints one line at 10 Hz while it runs, every third tick: the phase, x and psi held at zero, rear, gL and gR, the servo command, ok, the correction count and `fault=`, which is `none`, `rear` or `timeout`. So a bench check does not need a phone joined to the access point. One boot line names the duties, the lock angle, the servo centre, the pull times, the 4 s reverse cap, the 70 mm trigger and the correction limit, so a serial capture shows exactly what the firmware was configured to do.
 
-This runs on the car. The board boots the parking image, reports over USB and serves the page, and the page streams a live `psi`, which is computed from the two side sensors, so both of them return ranges. The bench image drives the motor legs at duty 200 on the 5 V rail. The steering is not calibrated: the servo centre, its direction and the 2.9 to 1 linkage ratio are assumptions from the CAD, so the wheels do not reach the commanded angle and no maneuver has been run to completion. The rear channel has not been read out on its own, and the page has not been opened on a phone.
+This runs on the car. The board boots the parking image, reports over USB and serves the page. The owner flashed `hw-2026-11-02.5`, pressed start, saw `back_in`, heard the motors and watched the run give up without moving the car. The diagnosis is in `INFO.md`: the rear reading was invalid, the old three-tick rear fault ended the leg 99 ms after `BACK_IN`, and the duties 55, 10 and 90 had been carried across a driver change. The fixed-duty build in this tree has not been flashed. The bench image drives the motor legs at duty 200 on the 5 V rail. The steering is not calibrated: the servo centre, its direction and the linkage are assumptions from the CAD, so the wheels do not reach the commanded angle. The rear channel has not been read out on its own, and the page has not been opened on a phone.
 
 ## How the maneuver runs
 
-The maneuver is fixed. Every segment is a constant held for a measured time, because a computed profile needs a measured car to be right and this car is not measured yet. The firmware closes no steering loop at all. The pose is still computed for the dashboard, and no motor or servo decision reads it.
+The maneuver is fixed. Every segment is a constant duty or lock held for a fixed time, because a computed profile needs a measured car to be right and this car is not measured. The firmware closes no steering loop and computes no pose. `control/config.h` holds every duty and time.
 
 ```mermaid
 %%{init: {'flowchart': {'curve': 'linear'}}}%%
 flowchart TD
-    start(["/start"]) --> cal["CALIBRATE<br/>motors off, wheels centred<br/>32 side pairs become S0 and the trim, 1.1 s"]
-    cal -->|"batch full"| backin["BACK_IN<br/>reverse straight at duty 55, 10 inside 160 mm<br/>servo held at 90 for the whole leg"]
-    cal -->|"no valid pair for 5 s"| giveup
-    backin -->|"rear at 70 mm"| more{"corrections left?"}
-    more -->|"yes"| pull1["PULL 1<br/>forward at 25 deg, 300 ms"]
-    pull1 -->|"300 ms, or rear past 220 mm"| pull2["PULL 2<br/>reverse at the opposite lock, 300 ms"]
-    pull2 --> pull3["PULL 3<br/>brake, centre the wheels, 150 ms"]
-    pull3 --> backin
-    more -->|"no, 3 done"| done["DONE<br/>brake and centre<br/>the log says whether it landed in tolerance"]
-    backin -->|"rear unusable, 2.5 m, or 10 s"| giveup["GIVEUP<br/>brake and flag it"]
+    start(["/start"]) --> backin["BACK_IN<br/>reverse at duty 200, wheels centred<br/>stops at the 70 mm rear trigger"]
+    backin -->|"70 mm"| more{"corrections left?"}
+    more -->|"yes"| pull1["PULL forward<br/>duty 200, lock 25 deg, 500 ms"]
+    pull1 --> pull2["PULL reverse<br/>duty 200, opposite lock, 500 ms"]
+    pull2 --> backin
+    more -->|"3 done"| done["DONE<br/>motors 0, wheels centred"]
+    backin -->|"4 s cap"| giveup["GIVEUP<br/>motors 0, fault rear or timeout"]
 ```
 
-The reverse is a straight leg, so the front wheels stay still until the rear reading says the car is at the wall. That is what the car looked like it needed: the old cascade steered from the first tick on an assumed speed, and the noise was enough to swing the servo before the car moved.
+The reverse is a straight leg at duty 200, so the front wheels stay still until the rear reading says the car is at the wall. `start()` enters `BACK_IN` on the next tick, with no gate and no calibration. The stop trigger is 70 mm, that is `rear_target` 38 mm plus `d_stop` 20 mm plus `rear_margin` 12 mm. A reading of exactly 0 is the sensor minimum-range status, which `main` treated as close, so it stops the leg too.
 
-The correction is main's shape. One forward pulse at a fixed lock, then the same lock the other way in reverse, which is the S-curve the return leg needs, then a short brake and centre. The direction comes from the sign of `gL - gR`, compared the way main compared it, and `pull_steer_sign` in `control/config.h` is the one polarity to flip if the car corrects the wrong way on the car.
+The correction is `main`'s shape. One forward pulse at a fixed lock, then the same lock the other way in reverse, which is the S-curve the return leg needs. The forward pulse is 500 ms at `90 - pullSign*25` degrees, the reverse is 500 ms at `90 + pullSign*25`, and there is no separate settle segment because the reverse leg is the settle. The direction comes from the sign of `gL - gR` on the last valid side pair, compared the way `main` compared it, and `pull_steer_sign` in `control/config.h` is the one polarity to flip if the car corrects the wrong way.
 
-The rear sensor is the only measurement that can end a leg early. A reading under 160 mm drops the reverse to the crawl duty, and a reading past 220 mm ends the forward pulse, which is main's gate. Everything else runs on its clock.
+An invalid rear reading never ends the reverse leg by itself. The leg ends on the trigger, or on the 4 s `back_in_max_ms` cap. The cap sets `Fault::REAR` when the rear reading was invalid and `Fault::TIMEOUT` when it was valid but the car never reached the trigger. Three corrections, then `DONE`.
 
 ## What the sensing is for now
 
-The state is still referred to the rear axle centre, and `control/geometry.h` still turns the two side gaps into `x` and `psi` against the calibrated `S0` and the trim. The dashboard plots both. Nothing else reads them: the firmware has no steering law, so the pose is telemetry and the maneuver runs on the rear reading and the clock. `control/hal.h` is still the one interface, so `src/esp32_hal.h` is the only hardware-aware code.
+The rear gap decides when the reverse stops. The two side gaps are telemetry only, and their difference chooses the pull direction. There is no `x`, no `psi`, no calibration and no `control/geometry.h`; the pose columns stay on the wire at zero to keep the CSV shape. `control/hal.h` is still the one interface, and `src/esp32_hal.h` is the only hardware-aware code.
 
 ## The layout
 
 | path | what is in it |
 |---|---|
-| `control/` | the control core: geometry, the supervisor and the `Hal` interface. no hardware calls |
-| `control/config.h` | every tunable, in one place: the chassis geometry, the maneuver, the pins, and the sensor and task timing. the one file to edit after measuring |
-| `control/supervisor.h` | the phase supervisor: calibrate, reverse, pull, done |
-| `control/geometry.h` | the two side gaps to `x` and `psi`, for the dashboard only |
+| `control/` | the control core: the supervisor and the `Hal` interface. no hardware calls |
+| `control/config.h` | every tunable, in one place: the maneuver duties and times, the pins, and the sensor and task timing. the one file to edit after measuring |
+| `control/supervisor.h` | the phase supervisor: idle, reverse, pull, done, giveup. it also carries the fault enum and the telemetry struct |
 | `tools/sim_main.cpp` | the host plant, the sensor forward model, the scenarios and the fault injection. it targets the removed steering core, so it no longer builds against this tree |
 | `tools/step_rig.cpp` | the lateral step-response rig, written against the removed `Control` |
 | `tools/step_plot.py` | computes the step metrics, writes the step figures |
 | `tools/sweep.py` | the parameter sweep, written against the removed steering core |
-| `tools/geom_checks.cpp` | direct checks of the sensor geometry |
+| `tools/geom_checks.cpp` | direct checks of the sensor geometry, written against the deleted `control/geometry.h`, so it no longer builds |
 | `docs/` | the step-response note, both time series and the PNG and SVG figures |
 | `src/main.cpp` | the firmware runtime: the control task on core 1, the web task on core 0, and the handoff between them |
 | `src/esp32_hal.h` | the ESP32 `Hal`: three VL53L0X on one bus, the servo and the DRV8833 |
@@ -312,8 +308,8 @@ The state is still referred to the rear axle centre, and `control/geometry.h` st
 | `src/control_build.cpp` | builds the control core with no hardware attached, as a compile check |
 | `lib/Network/` | the committed `Network` source, with the manifest that makes PlatformIO build it |
 
-The control core has no hardware calls in it, so the same code runs against the ESP32 through `src/esp32_hal.h`. The firmware is the only build that matters now. The host tools were written against the steering core that was removed on 2026-11-02, so they no longer compile and are kept only as a record until the owner decides what to do with them.
+The control core has no hardware calls in it, so the same code runs against the ESP32 through `src/esp32_hal.h`. The firmware is the only build that matters now. The host tools were written against the steering core and the pose that were removed on 2026-11-02, so they no longer compile and are kept only as a record until the owner decides what to do with them.
 
 ## Status
 
-The firmware builds and links for the ESP32-S3 Super Mini at 24.7 percent of RAM (80,924 of 327,680 bytes) and 1,043,534 bytes of the 4,063,232-byte `app0`. The fixed-time maneuver is new on 2026-11-02 and has not been flashed or run on the car, so nothing here claims how it drives. The working tree holds an uncommitted `releases/autoparking.factory.bin` of 1,125,504 bytes. The last published image is `hw-2026-11-02.4`, 1,133,168 bytes, which still carries the removed cascade. The servo centre, its direction and the 2.9 to 1 linkage ratio are still unmeasured assumptions, and the wheels are now clamped to the 45 to 135 degrees main drove.
+The firmware builds and links for the ESP32-S3 Super Mini at 24.7 percent of RAM (80,860 of 327,680 bytes) and 1,037,166 bytes of the 4,063,232-byte `app0`. The factory image in `releases/autoparking.factory.bin` is 1,119,120 bytes, sha256 `05f773588c50763345cbcc114f574de022d6017f004b6ad0dc52ef48b1c51478`. The fixed-duty maneuver has not been flashed or run on the car, so nothing here claims how it drives. The last published image is `hw-2026-11-02.5`, 1,125,504 bytes, which is the image that gave up 99 ms into `BACK_IN`. The servo centre, its direction and the linkage are still unmeasured assumptions, and the wheels are clamped to the 45 to 135 degrees main drove.
