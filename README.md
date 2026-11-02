@@ -99,10 +99,24 @@ heading loop has to be the fast one.
 | inner, heading | `psi` in radians | road wheel angle `delta` in radians | `Kp` 1.0, `Kd` 0.15 s |
 
 ```
-psiRef = -Kx*x - Ki*integral(x)              clamped to +/-0.17 rad
+psiRef = +Kx*x + Ki*integral(x)              clamped to +/-0.17 rad
 delta  =  Kp*(psiRef - psi) - Kd*psiDot      clamped to +/-0.20 rad
 servo  =  90 + 1*2.9*delta*57.2958           clamped to 45..135 degrees
 ```
+
+The outer sign is the reverse-drive sign, and it is not cosmetic. The pose
+convention is `x > 0` to the right and `psi > 0` nose right, so reverse drive
+gives `xdot = -V*psi` and `psidot = (V/L)*delta`. With `delta = Kp*(psiRef-psi)`
+and `psiRef = +Kx*x` the offset loop closes as
+
+```
+xddot + (V*Kp/L)*xdot + (V^2*Kp*Kx/L)*x = 0
+```
+
+Every coefficient is positive for `V > 0`, `Kx > 0` and `Kp > 0`, so it is
+stable. The negative form belongs to forward drive, where the same algebra
+gives determinant `-V^2*Kp*Kx/L`: a saddle, and any offset grows. A future
+forward maneuver must negate this law rather than copy it.
 
 The scale is the justification for the gains. 20 mm of offset asks for 4.6
 degrees of heading, and 4.6 degrees of heading asks for 4.6 degrees of road
@@ -120,13 +134,37 @@ Inside a deadband of 8 mm of offset and 1 degree of heading the servo is held at
 resolve, so a correction there is a correction on noise, and the loops resume
 from where they were when the car drifts out.
 
+Every cascade return, including the deadband hold and the `STEER_ENABLE` hold,
+goes through a slew limit of 6 servo degrees per tick, 240 degrees per second at
+25 ms. That is a rate limit, not a filter: it keeps the last command and nothing
+else, so it adds no lag while the command tracks the loop. It exists to remove
+the step at deadband entry and exit, where the target jumps between 90 and a
+live angle inside one tick. A state change still writes centre directly, so that
+step is untouched.
+
 `STEER_ENABLE` in `src/config.h` is the one switch. Off, the loop holds the
 wheels at centre and everything else runs, which is how to prove the drivetrain
 without the steering.
 
-The direction is not yet proven on the car. `DIR` is 1 and `PER_WHEEL` is 2.9,
-taken from the linkage geometry, and the sign of both is an assumption until a
-run is watched.
+`PER_WHEEL` is derived from the steering hardware, not guessed. The pinion is a
+0.8 module, 12 tooth spur gear on the servo spline: one servo revolution moves
+`pi*0.8*12 = 30.16` mm of rack, so 0.0838 mm per servo degree. The steering arm
+is 14.00 mm from the kingpin bore to the tie-rod bore, so a servo degree turns
+the wheel `atan(0.0838/14) = 0.343` degrees, and one wheel degree needs 2.92
+servo degrees. `PER_WHEEL = 2.9` encodes that, and both clamps are proven to
+stay off the servo limit at build time:
+
+```
+DELTA_MAX    = 0.20 rad = 11.5 wheel degrees = 33.2 servo degrees
+command span = 90 +/- 33.2 = 56.8 .. 123.2 degrees, inside 45 .. 135
+```
+
+Two `static_assert`s in `src/config.h` hold that inequality, so a wider
+`DELTA_MAX` or a different ratio fails the build instead of quietly flattening
+the loop against the clamp. The ratio comes from the CAD dimensions. The centre
+and the direction are still unproven on the car, so a wrong `DIR` makes both
+loops positive feedback and the first powered run has to check which way the
+wheels go.
 
 ## The platform
 
@@ -319,13 +357,13 @@ millimetres, `psi` and `psiRef` in milliradians and the servo in degrees.
 
 Build-verified only. Nothing on this branch has been flashed or run on the car.
 
-The firmware builds and links for the ESP32-S3 Super Mini at 48,204 bytes of RAM
-(14.7 percent of 327,680) and 997,462 bytes of flash. The application partition
+The firmware builds and links for the ESP32-S3 Super Mini at 48,220 bytes of RAM
+(14.7 percent of 327,680) and 997,306 bytes of flash. The application partition
 is the 4,063,232-byte `app0` from `max_app_4MB.csv`, so the app uses 24.5
 percent of it. PlatformIO prints 11.9 percent because it divides by the board's
 8 MB `maximum_size`, which is not the figure to quote. The
-`releases/autoparking.factory.bin` built from this tree is 1,079,136 bytes, sha256
-`d06f30af76faafa6820a5bf371019f40a1c229c407d1872e7732226f484c3768`.
+`releases/autoparking.factory.bin` built from this tree is 1,078,976 bytes, sha256
+`1639f6144bbd795bbb8b65d789a92c2ce260e710f54fb681a6e022081fe8cc45`.
 
 The three bench environments build. The servo, sensor and drive behaviour is not
 observed on hardware in this branch. Duty 200 is the only duty ever seen to move

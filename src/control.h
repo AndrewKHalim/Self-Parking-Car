@@ -78,6 +78,24 @@ struct Steer {
 // loop on heading gives a road wheel angle, and the linkage turns that into a
 // servo command. The derivative runs on the filtered heading, because the raw
 // one at 25 ms carries more sensor noise than motion.
+//
+// This car drives in reverse, so the outer law is positive. Under the pose
+// convention x > 0 is to the right and psi > 0 is the nose to the right, and
+// reverse drive gives
+//
+//   xdot   = -V*psi
+//   psidot = (V/L)*delta
+//   delta  = KP*(psiRef - psi)
+//   psiRef = +KX*x
+//
+// Substituting the last three into the first two gives
+//
+//   xddot + (V*KP/L)*xdot + (V^2*KP*KX/L)*x = 0
+//
+// Every coefficient is positive for V > 0 and KX, KP > 0, so the offset loop
+// is stable. The minus sign is the forward-drive form: its closed loop has
+// determinant -V^2*KP*KX/L, a saddle where any offset grows. A forward
+// maneuver must negate this law, not copy the loop blindly.
 // end
 class Cascade {
 public:
@@ -85,6 +103,7 @@ public:
     integral_ = 0.0f;
     psiF_ = 0.0f;
     psiPrev_ = 0.0f;
+    lastDeg_ = servo::CENTRE_DEG;
     primed_ = false;
   }
 
@@ -124,8 +143,9 @@ public:
 
     // The integral is only advanced away from the clamp. At the clamp the outer
     // loop is asking for more heading than the maneuver allows, so winding on
-    // would leave the loop stuck there after the offset reverses.
-    float psiRef = -control::KX * x - control::KI * integral_;
+    // would leave the loop stuck there after the offset reverses. The plus sign
+    // is the reverse-drive form derived above. A forward maneuver negates it.
+    float psiRef = control::KX * x + control::KI * integral_;
     if (psiRef > control::PSI_REF_MAX) {
       psiRef = control::PSI_REF_MAX;
     } else if (psiRef < -control::PSI_REF_MAX) {
@@ -145,7 +165,7 @@ public:
 
     Steer out;
     out.psiRef = psiRef;
-    out.servoDeg = (int)lroundf(deg);
+    out.servoDeg = slewTo(deg);
     return out;
   }
 
@@ -153,13 +173,33 @@ private:
   float integral_ = 0.0f;
   float psiF_ = 0.0f;
   float psiPrev_ = 0.0f;
+  float lastDeg_ = servo::CENTRE_DEG;
   bool primed_ = false;
 
-  // Centre with no heading demand, used by the deadband and by the switch.
-  static Steer hold() {
+  // Centre with no heading demand, used by the deadband and by the switch. The
+  // command goes through the slew limit like every other return, so a deadband
+  // entry and a switch-off both ramp to centre instead of stepping there.
+  Steer hold() {
     Steer out;
     out.psiRef = 0.0f;
-    out.servoDeg = servo::CENTRE_DEG;
+    out.servoDeg = slewTo(servo::CENTRE_DEG);
     return out;
+  }
+
+  // Move the command at most one slew step toward the target. This is a rate
+  // limit, not a filter: it keeps the last command and nothing else, so a
+  // command already moving the same way loses no time. Its job is the jump
+  // between centre and a live angle at deadband entry and exit. A step between
+  // states is not its job, because main writes centre directly there.
+  int slewTo(float target) {
+    const float step = control::SERVO_SLEW_DEG_PER_TICK;
+    if (target > lastDeg_ + step) {
+      lastDeg_ += step;
+    } else if (target < lastDeg_ - step) {
+      lastDeg_ -= step;
+    } else {
+      lastDeg_ = target;
+    }
+    return (int)lroundf(lastDeg_);
   }
 };

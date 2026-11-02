@@ -62,7 +62,9 @@ constexpr float D_DIFF = d_L - d_R;
 // The servo is commanded through the cascade and clamped to this range, which
 // is the range main drove. attach(PIN_SERVO) uses the library default pulse
 // map, 544 to 2400 us over 0 to 180 degrees, so 90 degrees is about 1472 us.
-// The centre, the direction and the linkage are still unmeasured.
+// The centre and the direction are still unmeasured. The linkage ratio is
+// derived from the design dimensions, and the derivation is below the control
+// namespace with two asserts that keep every command off the clamp.
 // end
 namespace servo {
 constexpr int CENTRE_DEG = 90;
@@ -133,7 +135,36 @@ constexpr float PSI_DOT_MAX = 3.0f;
 constexpr float PER_WHEEL = 2.9f;
 constexpr int DIR = 1;
 constexpr float DEG_PER_RAD = 57.2958f;
+
+// A rate limit on the servo command, not a filter. The command may move at
+// most 6 degrees per tick, which is 240 degrees per second at the 25 ms loop,
+// so a deadband entry or exit becomes a ramp instead of a step. It changes
+// nothing while the command is already tracking the loop.
+// end
+constexpr float SERVO_SLEW_DEG_PER_TICK = 6.0f;
 }
+
+// The linkage ratio is derived, not guessed. A 0.8 module pinion with 12 teeth
+// moves the rack pi*0.8*12 = 30.16 mm per servo revolution, so 0.0838 mm per
+// servo degree. The steering arm is 14.00 mm from the kingpin to the tie rod,
+// so a servo degree turns the wheel atan(0.0838/14) = 0.343 degrees, and one
+// wheel degree needs 2.92 servo degrees. PER_WHEEL = 2.9 encodes that.
+//
+// A wheel angle delta in radians is CENTRE + DIR*2.9*delta*57.2958 servo
+// degrees. DELTA_MAX = 0.20 rad is 11.5 wheel degrees, which is 33.2 servo
+// degrees, so the command spans 56.8 to 123.2 degrees. Both asserts below hold
+// that inside the 45 to 135 clamp, so a wider DELTA_MAX or a different linkage
+// fails the build instead of silently flattening the loop against the clamp.
+// The dimensions are design numbers from the CAD, not measurements on the car.
+// end
+static_assert(servo::CENTRE_DEG + control::PER_WHEEL * control::DELTA_MAX *
+                                          control::DEG_PER_RAD <=
+                  servo::MAX_DEG,
+              "steering command must stay inside servo::MAX_DEG");
+static_assert(servo::CENTRE_DEG - control::PER_WHEEL * control::DELTA_MAX *
+                                          control::DEG_PER_RAD >=
+                  servo::MIN_DEG,
+              "steering command must stay inside servo::MIN_DEG");
 
 // Duty 200 is the only duty ever observed to move this car on the DRV8833 at
 // 5 V, and it did so forward on the bench on 2026-11-02. 20 kHz is above
