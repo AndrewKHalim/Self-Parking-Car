@@ -24,4 +24,4 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" releases/autoparking.factory.bin \
             --title "Build $GITHUB_REF_NAME" \
-            --notes "Ready-to-flash image for the ESP32-S3 Super Mini, written at 0x0 with esptool. autoparking.factory.bin is the parking firmware: one loop, one PID on the lateral gap difference, reverse at duty 200 to 76 mm, and up to three 1400 ms pull-forward corrections at 25 degrees, with the dashboard on the board. Built from commit $GITHUB_SHA."
+            --notes "Ready-to-flash image for the ESP32-S3 Super Mini, written at 0x0 with esptool. autoparking.factory.bin is the parking firmware: a straight reverse at duty 200, a rear stop at 90 mm, a side guard that aborts under 25 mm, a 300 ms brake, and a dashboard showing the raw sensor readings. There is no steering controller because the side pair cannot separate offset from yaw. Built from commit $GITHUB_SHA."
