@@ -56,6 +56,7 @@ private:
 // Hold every part in reset, then release them one at a time. The last release
 // is the left sensor, which keeps the default address.
 inline bool DistanceSensorManager::begin() {
+  // All three start in reset, so no part is awake while another is addressed ---
   pinMode(board::PIN_XSHUT_L, OUTPUT);
   pinMode(board::PIN_XSHUT_R, OUTPUT);
   pinMode(board::PIN_XSHUT_REAR, OUTPUT);
@@ -63,10 +64,14 @@ inline bool DistanceSensorManager::begin() {
   digitalWrite(board::PIN_XSHUT_R, LOW);
   digitalWrite(board::PIN_XSHUT_REAR, LOW);
   delay(20);
+  // end
 
+  // Rear first, then right, then left, so the part that keeps 0x29 is last ---
   if (!bringUp(rear_, board::PIN_XSHUT_REAR, board::ADDR_REAR)) return false;
   if (!bringUp(right_, board::PIN_XSHUT_R, board::ADDR_RIGHT)) return false;
   if (!bringUp(left_, board::PIN_XSHUT_L, board::ADDR_LEFT)) return false;
+  // end
+
   return true;
 }
 
@@ -97,9 +102,11 @@ inline void DistanceSensorManager::sample(VL53L0X& sensor, float& held,
   valid = rawMm != 0 && rawMm <= sensor::MAX_VALID_MM;
   if (!valid) return;
 
+  // Snap to the first valid value, then follow main's 0.35 EMA ---
   const float mm = (float)rawMm;
   held = fresh ? sensor::EMA_ALPHA * mm + (1.0f - sensor::EMA_ALPHA) * held : mm;
   fresh = true;
+  // end
 }
 
 inline SensorReadings DistanceSensorManager::read() {

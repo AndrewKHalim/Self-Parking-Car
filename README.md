@@ -279,12 +279,12 @@ car is reversing or pulling. The websocket reconnects on its own.
 Build-verified only. Nothing on this branch has been flashed or run on the car.
 
 The firmware builds and links for the ESP32-S3 Super Mini at 48,092 bytes of RAM
-(14.7 percent of 327,680) and 995,638 bytes of flash. The application partition
+(14.7 percent of 327,680) and 995,654 bytes of flash. The application partition
 is the 4,063,232-byte `app0` from `max_app_4MB.csv`, so the app uses 24.5
 percent of it. PlatformIO prints 11.9 percent because it divides by the board's
 8 MB `maximum_size`, which is not the figure to quote. The
-`releases/autoparking.factory.bin` built from this tree is 1,077,392 bytes, sha256
-`948dd7f26b90d783daedfa254f0bdec0caac853e2129aa0a281cb62ca0ea52ee`.
+`releases/autoparking.factory.bin` built from this tree is 1,077,408 bytes, sha256
+`8913dafd1f5ecd6bfc4ae007bdae4c9b002fcc57e1a5d611c38dd496445d44be`.
 
 The three bench environments build. The servo, sensor and drive behaviour is not
 observed on hardware in this branch. The servo centre and direction are the

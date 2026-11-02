@@ -92,14 +92,15 @@ inline const char* MotorController::getDirectionString() const {
 // with both inputs low.
 inline void MotorController::driveChannel(int inA, int inB, int dir,
                                           uint8_t duty, bool invert) {
+  // A zero direction is the coast the rear limit wants, both inputs low ---
   if (dir == 0) {
     ledcWrite(inA, 0);
     ledcWrite(inB, 0);
     return;
   }
+  // end
 
-  // The inversion flag is the whole difference between the two mirrored
-  // motors. Only the driven leg gets the duty.
+  // The inversion flag is the whole difference between the mirrored motors ---
   const bool forward = (dir > 0) != invert;
   if (forward) {
     ledcWrite(inA, duty);
@@ -108,4 +109,5 @@ inline void MotorController::driveChannel(int inA, int inB, int dir,
     ledcWrite(inA, 0);
     ledcWrite(inB, duty);
   }
+  // end
 }

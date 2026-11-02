@@ -193,10 +193,10 @@ void setup() {
   Wire.begin(board::PIN_I2C_SDA, board::PIN_I2C_SCL);
   Wire.setClock(400000);
 
-  // Attach with the library defaults and write whole degrees. The pulse map is
-  // 544 to 2400 us over 0 to 180 degrees, the map main drove this servo with.
+  // The library default pulse map is 544 to 2400 us over 0 to 180 degrees ---
   steering.attach(board::PIN_SERVO);
   steering.write(servo::CENTRE_DEG);
+  // end
 
   motor.begin();
 
@@ -240,17 +240,18 @@ void loop() {
 
   const SensorReadings r = sensors.read();
 
-  // main's signal, the gap difference. A side dropout holds the last valid gap
-  // rather than inventing a nominal clearance, so the PID does not chase a
-  // number nobody measured.
+  // main's signal is the gap difference. A side dropout holds the last valid
+  // gap rather than inventing a nominal clearance nobody measured ---
   if (r.leftValid && r.rightValid) lastGapMm = r.gL - r.gR;
   const float gapMm = lastGapMm;
+  // end
 
-  // A start is accepted from idle or from parked. A press while the car is
-  // already moving is dropped, so the button cannot restart a run in progress.
+  // A start is accepted from idle or parked. A press while the car is moving
+  // is dropped, so the button cannot restart a run in progress ---
   if (startRequest.exchange(false)) {
     if (phase == PHASE_IDLE || phase == PHASE_PARKED) beginRun();
   }
+  // end
 
   int servoAngle = servo::CENTRE_DEG;
 
@@ -261,18 +262,21 @@ void loop() {
     break;
 
   case PHASE_REVERSE: {
-    // The rear reading is the tail clearance, so reaching 76 mm ends the leg.
-    // A held reading cannot fire this because rearValid must be true.
-    if (r.rearValid && r.gRear <= parking::REAR_STOP_MM) {
+    // A held rear reading cannot fire the stop, only a fresh one under 76 mm ---
+    const bool rearArrived = r.rearValid && r.gRear <= parking::REAR_STOP_MM;
+    // end
+
+    if (rearArrived) {
       motor.stop();
       steering.write(servo::CENTRE_DEG);
       servoAngle = servo::CENTRE_DEG;
 
-      // A gap worth correcting, seen while the car is still close to the wall,
-      // buys one pull forward. Once the three are spent the car parks where it
-      // is rather than hunting for a wall it cannot reach.
+      // A gap worth correcting while the car is close buys one pull forward.
+      // Once three are spent the car parks rather than hunting for a wall.
       const bool misaligned = fabsf(gapMm) > parking::PULL_GAP_MM;
       const bool stillClose = r.gRear < parking::PULL_REAR_MAX_MM;
+      // end
+
       if (misaligned && stillClose && pulls < parking::MAX_PULLS) {
         ++pulls;
         pullGapMm = gapMm;
@@ -283,9 +287,7 @@ void loop() {
       break;
     }
 
-    // The 4 s cap is a safety, not a distance. An invalid rear reading keeps
-    // the car reversing until the cap and then names the raw value, because a
-    // dead part has no reading to stop on.
+    // The cap is a safety, not a distance. A dead rear part names its raw value ---
     if (now - legStart >= parking::REVERSE_MAX_MS) {
       motor.stop();
       steering.write(servo::CENTRE_DEG);
@@ -302,6 +304,7 @@ void loop() {
       enter(PHASE_PARKED);
       break;
     }
+    // end
 
     const float offset = steerPid.compute(gapMm / 10.0f, dt);
     servoAngle = PIDController::toServoAngle(offset);
@@ -311,18 +314,20 @@ void loop() {
   }
 
   case PHASE_PULL: {
-    // main's counter-steer, 25 degrees opposite the larger gap. A positive gap
-    // means the left side is wider, so the wheels turn the other way.
+    // main's counter-steer, 25 degrees opposite the larger gap ---
     const float counterDeg =
         (pullGapMm > 0.0f) ? -parking::PULL_STEER_DEG : parking::PULL_STEER_DEG;
     servoAngle = PIDController::toServoAngle(counterDeg);
     steering.write(servoAngle);
+    // end
     motor.forward(drive::DUTY_FORWARD);
 
-    // The pull ends on time or as soon as the rear has room again. The pause
-    // is main's, so the gear change does not land while the car rolls forward.
+    // The pull ends on time or as soon as the rear has room again. The pause is
+    // main's, so the gear change does not land while the car rolls forward ---
     const bool timedOut = now - phaseStart >= parking::PULL_FORWARD_MS;
     const bool cleared = r.rearValid && r.gRear > parking::PULL_EXIT_MM;
+    // end
+
     if (timedOut || cleared) {
       motor.stop();
       steering.write(servo::CENTRE_DEG);
@@ -342,7 +347,7 @@ void loop() {
   }
 
   // One line at 10 Hz, and the same snapshot to the page. Units are in the
-  // field names because a serial capture has no caption.
+  // field names because a serial capture has no caption ---
   static unsigned long lastReport = 0;
   const unsigned long t = millis();
   if (t - lastReport >= timing::LOG_MS) {
@@ -354,6 +359,7 @@ void loop() {
     publish(r, t, servoAngle);
     socket.cleanupClients();
   }
+  // end
 
   delay(timing::LOOP_MS);
 }

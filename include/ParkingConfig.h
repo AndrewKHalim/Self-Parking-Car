@@ -41,15 +41,18 @@ constexpr uint8_t ADDR_REAR = 0x2B;
 }
 
 // The measured chassis and sensor stations, taken from the built car on
-// 2026-10-29 and 2026-11-02. Nothing in this firmware derives a pose, so these
-// are recorded rather than used. They are kept because the next feature that
-// needs a heading term has to start from the measurements, not from a guess.
+// 2026-10-29 and 2026-11-02. L_wb is the wheelbase, t_front the front kingpin
+// bore spacing and L_car the body length. d_L is the left sensor face ahead of
+// the rear axle and d_R is the right face station negated, so a negative d_R
+// means that face sits ahead of the axle. Nothing in this firmware derives a
+// pose, so these are recorded rather than used. They stay because the next
+// feature that needs a heading term has to start from the measurements.
 namespace car {
-constexpr float L_wb = 0.183f;    // wheelbase, metres
-constexpr float t_front = 0.0905f; // front kingpin bore spacing, metres
-constexpr float L_car = 0.234f;   // body length, metres
-constexpr float d_L = 0.067f;     // left sensor face ahead of the rear axle
-constexpr float d_R = -0.147f;    // right sensor face, negated station
+constexpr float L_wb = 0.183f;
+constexpr float t_front = 0.0905f;
+constexpr float L_car = 0.234f;
+constexpr float d_L = 0.067f;
+constexpr float d_R = -0.147f;
 }
 
 // The steering servo. CENTRE_DEG is the command that should point the wheels
@@ -109,12 +112,14 @@ constexpr int MAX_PULLS = 3;
 // car on the DRV8833 at 5 V, and it did so forward on the bench on 2026-11-02.
 // main's 55, 10 and 90 were an L298N at a different rail. 20 kHz is above
 // hearing, which is what the owner asked for after the default 1 kHz whine.
-// The DRV8833 datasheet sets no maximum PWM input frequency and its 450 ns
-// input deglitch time is a hundred times shorter than a 50 us period, so the
-// input follows the signal. Its switching loss is 10 to 30 percent of the DC
-// loss and grows with frequency, which is the cost of the quiet band. Pololu's
-// own advice is to use an ultrasonic frequency such as 20 kHz for motor quiet,
-// and it is their DRV8833 board this is.
+//
+// The TI DRV8833 datasheet, SLVSAR1E, sets no maximum PWM input frequency and
+// gives a 450 ns input deglitch time, a hundred times shorter than a 50 us
+// period, so the input follows the signal. It does say switching loss is 10 to
+// 30 percent of the DC loss and grows with frequency, which is the cost of the
+// quiet band. Pololu's forum answer is to use an ultrasonic frequency such as
+// 20 kHz to remove motor whine (PWM Frequency and Noise, thread 4636, 2012), and
+// this car runs Pololu's DRV8833 carrier.
 namespace drive {
 constexpr uint8_t DUTY_REVERSE = 200;
 constexpr uint8_t DUTY_FORWARD = 200;

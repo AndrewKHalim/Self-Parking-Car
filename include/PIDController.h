@@ -39,10 +39,14 @@ inline void PIDController::reset() {
 // up past the servo travel.
 inline float PIDController::compute(float errorCm, float dtSec) {
   if (dtSec <= 0.001f) dtSec = 0.025f;
+
+  // A small error is treated as zero so the servo does not chase noise ---
   if (fabsf(errorCm) < pid::DEADBAND_CM) errorCm = 0.0f;
+  // end
 
   const float pTerm = kp_ * errorCm;
 
+  // The integral is clamped and bleeds away inside the deadband ---
   if (errorCm != 0.0f) {
     integral_ += errorCm * dtSec;
     integral_ = constrain(integral_, -pid::INTEGRAL_CLAMP, pid::INTEGRAL_CLAMP);
@@ -50,12 +54,14 @@ inline float PIDController::compute(float errorCm, float dtSec) {
     integral_ *= 0.95f;
   }
   const float iTerm = ki_ * integral_;
+  // end
 
-  // The derivative is low passed because the ToF reading is noisy.
+  // The derivative is low passed because the ToF reading is noisy ---
   const float rawDerivative = (errorCm - previousError_) / dtSec;
   filteredDerivative_ = pid::DERIVATIVE_ALPHA * rawDerivative +
                         (1.0f - pid::DERIVATIVE_ALPHA) * filteredDerivative_;
   const float dTerm = kd_ * filteredDerivative_;
+  // end
 
   previousError_ = errorCm;
   return pTerm + iTerm + dTerm;
