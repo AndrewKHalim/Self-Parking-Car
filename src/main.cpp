@@ -1,14 +1,15 @@
-// Straight reverse, rear stop, side guard. There is no steering law.
+// Reverse into the bay under a cascade PID, stop on the rear sensor.
 //
-// The two side faces give one number, gL - gR, for two unknowns, the lateral
-// offset and the yaw. At 5 degrees of yaw the heading term alone is 18.6 mm of
-// false offset, so a controller on that mixture has no unique set point. main
-// tried anyway and worked sometimes. This firmware keeps the wheels centred,
-// reverses in a straight line, stops on the rear sensor and refuses to move if
-// the side pair says the car is already against a wall.
+// The two side faces sit at different stations along the car, so the pair
+// separates lateral offset from heading once the bay width is measured at the
+// start of the run. The derivation is in control.h. The outer loop on offset
+// asks for a heading, the inner loop on heading asks for a road wheel angle,
+// and the linkage turns that into a servo command. Reversing steering is
+// unstable, so the heading loop is the fast one.
 //
-// The states are IDLE, CHECK, REVERSE, BRAKE, PARKED and FAULT. One loop at
-// delay(25). The web server runs its own task on core 0 through AsyncTCP.
+// The states are IDLE, CHECK, CALIBRATE, REVERSE, BRAKE, PARKED and FAULT. One
+// loop at delay(25). The web server runs its own task on core 0 through
+// AsyncTCP.
 
 #include <Arduino.h>
 #include <ESP32Servo.h>
@@ -21,6 +22,7 @@
 #include <cstring>
 
 #include "config.h"
+#include "control.h"
 #include "dashboard_html.h"
 #include "drive.h"
 #include "sensors.h"
@@ -33,6 +35,7 @@ Servo steering;
 enum State : uint8_t {
   STATE_IDLE = 0,
   STATE_CHECK,
+  STATE_CALIBRATE,
   STATE_REVERSE,
   STATE_BRAKE,
   STATE_PARKED,
@@ -62,6 +65,31 @@ uint16_t framesR_[parking::CHECK_FRAMES];
 uint16_t framesRear_[parking::CHECK_FRAMES];
 int frameCount_ = 0;
 
+// Every channel is filtered once per loop and everything downstream reads the
+// filtered number. An invalid frame holds the last good value, so a single
+// dropped reading does not jerk the pose.
+// end
+Ema filterL_;
+Ema filterR_;
+Ema filterRear_;
+float gLf_ = sensor::NO_TARGET_MM;
+float gRf_ = sensor::NO_TARGET_MM;
+float rearF_ = sensor::NO_TARGET_MM;
+
+// The bay width in metres, measured once per run, and the pose that follows
+// from it. pose_ stays zero until a run has calibrated.
+// end
+Cascade steer_;
+Steer steerOut_ = {0.0f, servo::CENTRE_DEG};
+Pose pose_ = {0.0f, 0.0f};
+float s0_ = 0.0f;
+bool calibrated_ = false;
+int calCount_ = 0;
+float calSum_ = 0.0f;
+float calDiff_ = 0.0f;
+unsigned long lastCalSample_ = 0;
+unsigned long lastSteer_ = 0;
+
 AsyncWebServer server(80);
 AsyncWebSocket socket("/ws");
 std::atomic<bool> startRequest{false};
@@ -70,6 +98,8 @@ const char* stateName(State s) {
   switch (s) {
   case STATE_CHECK:
     return "check";
+  case STATE_CALIBRATE:
+    return "calibrate";
   case STATE_REVERSE:
     return "reverse";
   case STATE_BRAKE:
@@ -108,7 +138,28 @@ void enter(State next) {
     frameCount_ = 0;
     fault_ = FAULT_NONE;
   }
-  if (next == STATE_REVERSE) rearInvalid_ = 0;
+  if (next == STATE_CALIBRATE) {
+    calCount_ = 0;
+    calSum_ = 0.0f;
+    calDiff_ = 0.0f;
+    lastCalSample_ = millis();
+    calibrated_ = false;
+    steer_.reset();
+  }
+  if (next == STATE_REVERSE) {
+    rearInvalid_ = 0;
+    lastSteer_ = millis();
+    steer_.seed(pose_.psi);
+  }
+  if (next == STATE_IDLE) steer_.reset();
+
+  // Outside REVERSE the wheels are written to centre, so the reported command
+  // has to say centre too. Only REVERSE produces a steering demand.
+  // end
+  if (next != STATE_REVERSE) {
+    steerOut_.psiRef = 0.0f;
+    steerOut_.servoDeg = servo::CENTRE_DEG;
+  }
 }
 
 uint16_t median5(uint16_t* v) {
@@ -163,19 +214,36 @@ void printBootConfig() {
                 timing::LOOP_MS, (int)parking::CHECK_FRAMES,
                 parking::REVERSE_MAX_MS, parking::BRAKE_MS,
                 parking::REAR_STOP_MM, sensor::SIDE_GUARD_MM);
+  Serial.printf("control steer=%d Kx=%.2f Ki=%.2f Kp=%.2f Kd=%.2f "
+                "psiRefMax=%.2f deltaMax=%.2f deadband=%.0fmm/%.3frad\n",
+                (int)control::STEER_ENABLE, control::KX, control::KI,
+                control::KP, control::KD, control::PSI_REF_MAX,
+                control::DELTA_MAX, control::X_DEADBAND_M * 1000.0f,
+                control::PSI_DEADBAND_RAD);
+  Serial.printf("geometry dL=%.3f dR=%.3f sum=%.3f diff=%.3f "
+                "perWheel=%.1f dir=%d tau=%.3fs\n",
+                car::d_L, car::d_R, car::D_SUM, car::D_DIFF,
+                control::PER_WHEEL, control::DIR, control::PSI_TAU_S);
 }
 
 // One JSON object, every field an integer or a name. The gaps and the rear are
-// raw millimetres, so 8190 and 65535 reach the page and it can say none.
-void publish(const Readings& r, unsigned long now) {
+// filtered millimetres, so 8190 and 65535 reach the page and it can say none.
+// x is millimetres, psi and psiRef are milliradians, and the servo is degrees.
+// end
+void publish(unsigned long now) {
   if (socket.count() == 0) return;
 
-  static char line[224];
+  static char line[320];
   snprintf(line, sizeof(line),
-           "{\"t\":%lu,\"state\":\"%s\",\"fault\":\"%s\",\"gL\":%u,\"gR\":%u,"
-           "\"rear\":%u,\"servo\":%d,\"ready\":%d}",
-           now, stateName(state_), faultName(fault_), r.gL, r.gR, r.rear,
-           servo::CENTRE_DEG, (int)ready_);
+           "{\"t\":%lu,\"state\":\"%s\",\"fault\":\"%s\",\"x\":%ld,"
+           "\"psi\":%ld,\"psiRef\":%ld,\"servo\":%d,\"gL\":%d,\"gR\":%d,"
+           "\"rear\":%d,\"ready\":%d}",
+           now, stateName(state_), faultName(fault_),
+           (long)lroundf(pose_.x * 1000.0f),
+           (long)lroundf(pose_.psi * 1000.0f),
+           (long)lroundf(steerOut_.psiRef * 1000.0f), steerOut_.servoDeg,
+           (int)lroundf(gLf_), (int)lroundf(gRf_), (int)lroundf(rearF_),
+           (int)ready_);
   socket.textAll(line);
 }
 
@@ -214,7 +282,7 @@ void setup() {
   delay(200);
 
   Serial.println();
-  Serial.println("autoparking-car: straight reverse, rear stop, side guard");
+  Serial.println("autoparking-car: cascade PID reverse, rear stop, side guard");
   printBootConfig();
 
   Wire.begin(board::PIN_I2C_SDA, board::PIN_I2C_SCL);
@@ -258,6 +326,21 @@ void loop() {
 
   const Readings r = sensors.read();
 
+  // One filter pass for the whole loop, before any state reads a number. An
+  // invalid frame holds the last good value, so a dropped reading does not jerk
+  // the pose, and the freshness tests below still run on the raw frame.
+  // end
+  if (Sensors::fresh(r.gL)) gLf_ = filterL_.step(r.gL, sensor::EPA);
+  if (Sensors::fresh(r.gR)) gRf_ = filterR_.step(r.gR, sensor::EPA);
+  if (Sensors::fresh(r.rear)) rearF_ = filterRear_.step(r.rear, sensor::EPA);
+
+  // The pose exists only after a run has measured the bay width. Until then
+  // the page shows zero rather than a heading against an unknown S0.
+  // end
+  if (calibrated_) {
+    pose_ = poseFromGaps(gLf_ / 1000.0f, gRf_ / 1000.0f, s0_);
+  }
+
   if (startRequest.exchange(false)) {
     if (state_ == STATE_IDLE || state_ == STATE_PARKED) {
       startAfterCheck_ = true;
@@ -299,23 +382,65 @@ void loop() {
       break;
     }
     if (startAfterCheck_) {
-      enter(STATE_REVERSE);
+      enter(STATE_CALIBRATE);
     } else {
       enter(STATE_IDLE);
     }
     break;
   }
 
+  case STATE_CALIBRATE: {
+    motors.brake();
+    steering.write(servo::CENTRE_DEG);
+
+    // One sample per sensor period. The loop is faster than the part, and a
+    // repeated frame would weight the average towards a stuck reading.
+    // end
+    const bool pairOk = Sensors::fresh(r.gL) && Sensors::fresh(r.gR) &&
+                        r.gL >= sensor::SIDE_GUARD_MM &&
+                        r.gR >= sensor::SIDE_GUARD_MM;
+    if (pairOk && now - lastCalSample_ >= sensor::PERIOD_MS) {
+      calSum_ += gLf_ + gRf_;
+      calDiff_ += gLf_ - gRf_;
+      ++calCount_;
+      lastCalSample_ = now;
+    }
+
+    if (calCount_ >= parking::CALIBRATE_FRAMES) {
+      s0_ = calSum_ / (calCount_ * 1000.0f);
+      // x0 is the offset the car entered with. It is printed for the owner and
+      // is not subtracted from anything, because the loop has to centre the
+      // car and not hold it where it started.
+      // end
+      const float x0 = 0.5f * calDiff_ / calCount_;
+      calibrated_ = true;
+      pose_ = poseFromGaps(gLf_ / 1000.0f, gRf_ / 1000.0f, s0_);
+      Serial.printf("calibrate frames=%d S0=%.1fmm x0=%.1fmm\n", calCount_,
+                    s0_ * 1000.0f, x0);
+      enter(STATE_REVERSE);
+      break;
+    }
+    if (now - stateStart_ >= parking::CALIBRATE_MAX_MS) {
+      fault_ = FAULT_SIDE;
+      Serial.printf("calibrate failed frames=%d\n", calCount_);
+      enter(STATE_FAULT);
+      break;
+    }
+    break;
+  }
+
   case STATE_REVERSE: {
-    // The stop is a fresh rear reading at or under 90 mm. A fresh 0 to 29 mm is
-    // inside that window and means the face is at the wall, so it stops too.
+    // The stop is the filtered rear at or under 90 mm. The wall test uses the
+    // raw frame, because 0 to 29 mm is unambiguous and must not wait for the
+    // filter. The guard also uses raw, since it aborts rather than steers.
+    // end
     const bool freshRear = Sensors::fresh(r.rear);
     const bool sideClose =
         (Sensors::fresh(r.gL) && r.gL < sensor::SIDE_GUARD_MM) ||
         (Sensors::fresh(r.gR) && r.gR < sensor::SIDE_GUARD_MM);
 
-    if (freshRear &&
-        (r.rear <= parking::REAR_STOP_MM || Sensors::atWall(r.rear))) {
+    if (freshRear && (rearF_ <= parking::REAR_STOP_MM ||
+                      Sensors::atWall(r.rear))) {
       enter(STATE_BRAKE);
       break;
     }
@@ -334,15 +459,25 @@ void loop() {
       rearInvalid_ = 0;
     }
     // The cap is a give-up, not a wall. It names timeout so a run that ran out
-    // of time cannot be mistaken for one that reached the rear limit ---
+    // of time cannot be mistaken for one that reached the rear limit.
     if (now - stateStart_ >= parking::REVERSE_MAX_MS) {
       fault_ = FAULT_TIMEOUT;
       enter(STATE_BRAKE);
       break;
     }
-    // end
 
-    steering.write(servo::CENTRE_DEG);
+    // The measured dt feeds the derivative, so a slow tick is not read as a
+    // fast heading change. The clamp keeps the first tick after entry, and a
+    // stalled loop, from producing a nonsense rate.
+    // end
+    const unsigned long dtMs = now - lastSteer_;
+    lastSteer_ = now;
+    float dt = dtMs / 1000.0f;
+    if (dt < 0.005f) dt = 0.005f;
+    if (dt > 0.2f) dt = 0.2f;
+
+    steerOut_ = steer_.step(pose_.x, pose_.psi, dt);
+    steering.write(steerOut_.servoDeg);
     motors.reverse(drive::DUTY_REVERSE);
     break;
   }
@@ -370,11 +505,12 @@ void loop() {
   const unsigned long t = millis();
   if (t - lastReport >= timing::LOG_MS) {
     lastReport = t;
-    Serial.printf("t=%lu state=%s gL=%u gR=%u rear=%u servo=%d ready=%d "
-                  "fault=%s\n",
-                  t, stateName(state_), r.gL, r.gR, r.rear,
-                  servo::CENTRE_DEG, (int)ready_, faultName(fault_));
-    publish(r, t);
+    Serial.printf("t=%lu state=%s x=%.1fmm psi=%.4frad psiRef=%.4frad "
+                  "servo=%d gL=%.1f gR=%.1f rear=%.1f ready=%d fault=%s\n",
+                  t, stateName(state_), pose_.x * 1000.0f, pose_.psi,
+                  steerOut_.psiRef, steerOut_.servoDeg, gLf_, gRf_, rearF_,
+                  (int)ready_, faultName(fault_));
+    publish(t);
     socket.cleanupClients();
   }
 

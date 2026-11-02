@@ -1,13 +1,13 @@
 # Self-parking-car
 
-A small RC car reverses into a perpendicular parking bay and stops before the
-rear wall. It drives straight back with the wheels held at centre, watches the
-rear sensor for the stop, and refuses to move if either side sensor says the car
-is already against something. A dashboard on the ESP32 shows the live readings
-and has a start button.
+A small RC car reverses into a perpendicular parking bay, steered by a cascade
+PID, and stops before the rear wall. The two side sensors measure the lateral
+offset and the heading, the rear sensor sets the stop, and a dashboard on the
+ESP32 shows the pose and the steering command while the loop runs.
 
-The branch is `simple`. There is no steering controller and no heading estimate.
-The side sensors guard the car and do not steer it.
+The branch is `simple`. One loop at 25 ms, one controller, no simulator and no
+HAL. The control law is in `src/control.h`, the gains and the limits are in
+`src/config.h`.
 
 ## The hardware
 
@@ -15,7 +15,7 @@ The side sensors guard the car and do not steer it.
 |---|---|---|
 | MCU | ESP32-S3 Super Mini | 4MB flash, 240MHz dual core, native USB-C, module soldered to the board |
 | ToF sensors | 3x VL53L0X | must be VL53L0X, not VL53L1X. they are not drop-in compatible and use a different library. two face straight out sideways, one faces back |
-| steering servo | SG90 or MG996R | held at centre, but kept wired and driven so the wheels stay straight |
+| steering servo | SG90 or MG996R | steered by the cascade during the reverse, held at centre otherwise. the centre, the direction and the linkage are still unmeasured |
 | motor driver | DRV8833 module | driven at 20 kHz, with a real brake on both inputs high |
 | drive motor | stock Tamiya yellow motor, 6V rated | |
 | chassis | Tamiya RC chassis with servo bay | the stock knuckle is turned by the drive motor through a plastic arm, so it cannot take a commanded angle and the chassis is converted to servo steering |
@@ -52,23 +52,81 @@ The measured chassis and sensor stations are also in `src/config.h`: `L_wb`
 and a face separation of 0.095 m. Nothing here computes a heading, so they are kept
 as measurements rather than used.
 
-## Why it does not centre itself
+## The control law
 
-The two side faces give one number, `gL - gR`, for two unknowns, the lateral
-offset and the yaw. The gap difference is
+The two side faces sit at different stations along the car, so the pair
+separates lateral offset from heading once the bay width is known. Each gap is
+the distance from that face to the bay wall.
 
 ```
-gL - gR = 2*x + 0.214*sin(psi)
+gL = W/2 + x + d_L*psi
+gR = W/2 - x + d_R*psi
 ```
 
-so at 5 degrees of yaw the heading term alone is 18.6 mm of false offset. A
-controller on that mixture has no unique set point: the same reading can mean
-centred and straight or offset and yawed. That is why the earlier builds that
-steered on it worked sometimes and never reliably.
+Add them and the offset cancels, so the sum is a heading signal.
 
-This firmware does not attempt it. The wheels stay at centre, the car reverses
-straight, and the side pair is used only as a guard: a fresh side reading under
-25 mm stops the run before the car pushes into a wall.
+```
+gL + gR = W + (d_L + d_R)*psi
+psi = (gL + gR - S0) / (d_L + d_R)
+```
+
+Subtract them and the width cancels, so the difference is the offset plus a
+heading term that comes out once the heading is known.
+
+```
+gL - gR = 2x + (d_L - d_R)*psi
+x = 0.5*(gL - gR) - 0.5*(d_L - d_R)*psi
+```
+
+With `d_L = 0.067`, `d_R = -0.147`, `d_L + d_R = -0.080` and
+`d_L - d_R = 0.214`. `S0` is the bay width, measured at the start of every run
+with the motors off and the wheels centred, averaged over 32 valid pairs. It is
+the bay width only if the car starts square. A car that starts yawed carries
+that yaw as a constant bias in every `psi`, which shows as a `psi` that does not
+sit at zero while the car stands straight.
+
+The offset is not referenced to the start. At `psi = 0` the difference is
+already absolute, so subtracting the starting difference would make the loop
+hold whatever offset the car entered with instead of centring it. The starting
+difference is printed as `x0` and is a diagnostic only.
+
+The controller is a cascade, because reversing steering is unstable and the
+heading loop has to be the fast one.
+
+| loop | measures | output | gains |
+|---|---|---|---|
+| outer, offset | `x` in metres | heading reference `psiRef` in radians | `Kx` 4.0 rad/m, `Ki` 0 |
+| inner, heading | `psi` in radians | road wheel angle `delta` in radians | `Kp` 1.0, `Kd` 0.15 s |
+
+```
+psiRef = -Kx*x - Ki*integral(x)              clamped to +/-0.17 rad
+delta  =  Kp*(psiRef - psi) - Kd*psiDot      clamped to +/-0.20 rad
+servo  =  90 + 1*2.9*delta*57.2958           clamped to 45..135 degrees
+```
+
+The scale is the justification for the gains. 20 mm of offset asks for 4.6
+degrees of heading, and 4.6 degrees of heading asks for 4.6 degrees of road
+wheel, which the 2.9 linkage turns into 13.3 servo degrees. That is the size of
+correction `main` drove on this car. The gains are untuned guesses, not a
+measured response.
+
+`psi` passes through a first-order low pass with `tau = 0.05 s` before the
+derivative, and `psiDot` is the difference of the filtered signal over the
+measured `dt` from `millis()`, clamped to +/-3 rad/s. The integral freezes while
+`psiRef` sits at its clamp and resets in `idle`.
+
+Inside a deadband of 8 mm of offset and 1 degree of heading the servo is held at
+90 and nothing is reset. That band is inside what the sensor and the linkage can
+resolve, so a correction there is a correction on noise, and the loops resume
+from where they were when the car drifts out.
+
+`STEER_ENABLE` in `src/config.h` is the one switch. Off, the loop holds the
+wheels at centre and everything else runs, which is how to prove the drivetrain
+without the steering.
+
+The direction is not yet proven on the car. `DIR` is 1 and `PER_WHEEL` is 2.9,
+taken from the linkage geometry, and the sign of both is an assumption until a
+run is watched.
 
 ## The platform
 
@@ -155,20 +213,23 @@ one second apart, and prints each angle with the pulse it sends.
 
 ## What the firmware does
 
-One loop at `delay(25)`. The states are `idle`, `check`, `reverse`, `brake`,
-`parked` and `fault`.
+One loop at `delay(25)`. The states are `idle`, `check`, `calibrate`,
+`reverse`, `brake`, `parked` and `fault`.
 
 | state | what it does |
 |---|---|
-| `idle` | brakes, wheels centred, accepts a start |
+| `idle` | brakes, wheels centred, resets the integral, accepts a start |
 | `check` | takes five frames, medians each channel, and refuses the run unless the rear is fresh and 30 to 800 mm and both sides are fresh and at least 25 mm |
-| `reverse` | brakes released, both motors reverse at duty 200, wheels centred |
+| `calibrate` | motors off, wheels centred, averages 32 valid side pairs into `S0` and prints `x0` |
+| `reverse` | brakes released, both motors reverse at duty 200, cascade steers |
 | `brake` | both motor inputs high for 300 ms, so the car is held |
 | `parked` | brake held, wheels centred, accepts a start |
 | `fault` | brake held, latched until power cycle |
 
 `check` runs once at boot and again on every start. A failed check names the
-reason, `fault=rear` or `fault=side`, and latches.
+reason, `fault=rear` or `fault=side`, and latches. `calibrate` gives up after
+3000 ms without 32 valid pairs and latches `fault=side`, so a dead side pair
+cannot hold the run there.
 
 `reverse` ends four ways:
 
@@ -189,8 +250,8 @@ face is at the wall. It counts as a stop, not as a distance of 29 mm.
 button whenever the firmware's `ready` flag is false. `ready` is true only in
 those two states, so the button is dark for the whole run and in a fault.
 
-The servo is written to 90 degrees every loop and clamped to 45 to 135. It is
-never commanded anywhere else.
+The servo is written by the cascade during `reverse` and held at 90 everywhere
+else. Every command is clamped to 45 to 135 degrees inside the controller.
 
 ## The boot lines
 
@@ -199,10 +260,12 @@ the parts answered with, 8190 for no target and 65535 for a timeout or a part
 that never came up.
 
 ```
-autoparking-car: straight reverse, rear stop, side guard
+autoparking-car: cascade PID reverse, rear stop, side guard
 pins i2c=8/9 xshut=1/2/10 servo=11 motor=4/5/6/7
 drive pwm=20000Hz/8bit duty=200/200 servo=45..135 centre=90
 times loop=25ms check=5 frames reverseMax=3000ms brake=300ms stop=90mm guard=25mm
+control steer=1 Kx=4.00 Ki=0.00 Kp=1.00 Kd=0.15 psiRefMax=0.17 deltaMax=0.20 deadband=8mm/0.017rad
+geometry dL=0.067 dR=-0.147 sum=-0.080 diff=0.214 perWheel=2.9 dir=1 tau=0.050s
 part rear  xshut=10 addr=0x2B init=ok raw=123 mm
 part right xshut= 2 addr=0x2A init=ok raw=456 mm
 part left  xshut= 1 addr=0x29 init=ok raw=789 mm
@@ -218,7 +281,7 @@ leave you guessing which sensor is dead.
 The serial line prints at 10 Hz:
 
 ```
-t=1234 state=reverse gL=210 gR=198 rear=340 servo=90 ready=0 fault=none
+t=1234 state=reverse x=-6.2mm psi=0.0131rad psiRef=-0.0248rad servo=86 gL=210.4 gR=198.1 rear=340.0 ready=0 fault=none
 ```
 
 The ESP32 joins the network in `src/wifi_config.h`. If it cannot join within
@@ -231,9 +294,11 @@ The ESP32 joins the network in `src/wifi_config.h`. If it cannot join within
 | `/start` | sets the start flag and returns `{"start":true}` |
 | `/ws` | one JSON snapshot at 10 Hz |
 
-The page shows state, `gL`, `gR`, rear, servo, ready and fault, and has a start
-button that is disabled while `ready` is false. Raw 8190 and 65535 show as
-`none`, and 0 to 29 shows as `wall`. There is no chart and no CSV.
+The page shows state, `x` in millimetres, `psi` in degrees, the servo command
+in degrees, the filtered gaps, the rear, ready and fault, and has a start button
+that is disabled while `ready` is false. 8190 and 65535 show as `none`, and 0 to
+29 shows as `wall`. There is no chart and no CSV. The JSON carries `x` in
+millimetres, `psi` and `psiRef` in milliradians and the servo in degrees.
 
 ## The layout
 
@@ -242,6 +307,7 @@ button that is disabled while `ready` is false. Raw 8190 and 65535 show as
 | `src/config.h` | pins, addresses, measured chassis and stations, servo range, sensor timing and thresholds |
 | `src/sensors.h` | the three VL53L0X, independent bring-up, raw reads and the freshness rules |
 | `src/drive.h` | the DRV8833 on four pins at 20 kHz, forward, reverse and brake |
+| `src/control.h` | the pose from the two gaps and the cascade, with the derivation |
 | `src/main.cpp` | the one loop, the states and the web routes |
 | `src/dashboard_html.h` | the page, as one PROGMEM string |
 | `src/wifi_config.h` | the SSID, the password and the fallback access point |
@@ -253,13 +319,13 @@ button that is disabled while `ready` is false. Raw 8190 and 65535 show as
 
 Build-verified only. Nothing on this branch has been flashed or run on the car.
 
-The firmware builds and links for the ESP32-S3 Super Mini at 48,012 bytes of RAM
-(14.7 percent of 327,680) and 994,882 bytes of flash. The application partition
+The firmware builds and links for the ESP32-S3 Super Mini at 48,204 bytes of RAM
+(14.7 percent of 327,680) and 997,462 bytes of flash. The application partition
 is the 4,063,232-byte `app0` from `max_app_4MB.csv`, so the app uses 24.5
 percent of it. PlatformIO prints 11.9 percent because it divides by the board's
 8 MB `maximum_size`, which is not the figure to quote. The
-`releases/autoparking.factory.bin` built from this tree is 1,076,544 bytes, sha256
-`ddc1b2807ff67d4b5b85ea9e2da0e6fd0f63dfd1673df1baaa688e4496391e8c`.
+`releases/autoparking.factory.bin` built from this tree is 1,079,136 bytes, sha256
+`d06f30af76faafa6820a5bf371019f40a1c229c407d1872e7732226f484c3768`.
 
 The three bench environments build. The servo, sensor and drive behaviour is not
 observed on hardware in this branch. Duty 200 is the only duty ever seen to move

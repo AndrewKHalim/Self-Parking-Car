@@ -13,6 +13,14 @@
 // coast, not brake, and is never used here. A brake is what keeps the car from
 // rolling after the rear limit and while parked.
 
+// The four inputs are LEDC channels at 20 kHz and 8 bits, which is all this
+// part needs, two plain logic inputs per channel and no gate drive. MCPWM buys
+// nothing here, its dead time, complementary outputs and fault inputs are for
+// an H bridge made of FETs, and the Arduino core 3.3.12 has no MCPWM wrapper at
+// all. The servo is the other way round, ESP32Servo 3.2.1 puts it on MCPWM at
+// 50 Hz on the S3, so the servo and the motors never share a timer.
+// end
+
 class Drive {
 public:
   void begin();

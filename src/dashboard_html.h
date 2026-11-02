@@ -2,8 +2,9 @@
 
 // The dashboard, as one self-contained page. No CDN, no framework, no webfont,
 // so every byte comes from the ESP32. The websocket reconnects on its own and
-// the page only shows the newest sample. There is no chart and no CSV, because
-// the cells are the whole state of a car that only reverses in a straight line.
+// the page only shows the newest sample. The cells are the measured pose and
+// the steering command, because this is a control assignment and the state has
+// to be visible while the loop runs.
 
 #include <Arduino.h>
 
@@ -41,10 +42,12 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(<!doctype html>
 
 <div class="grid">
   <div class="cell"><span class="k">state</span><span class="v" id="v-state">-</span></div>
+  <div class="cell"><span class="k">x</span><span class="v" id="v-x">-</span></div>
+  <div class="cell"><span class="k">psi</span><span class="v" id="v-psi">-</span></div>
+  <div class="cell"><span class="k">servo</span><span class="v" id="v-servo">-</span></div>
   <div class="cell"><span class="k">gL</span><span class="v" id="v-gl">-</span></div>
   <div class="cell"><span class="k">gR</span><span class="v" id="v-gr">-</span></div>
   <div class="cell"><span class="k">rear</span><span class="v" id="v-rear">-</span></div>
-  <div class="cell"><span class="k">servo</span><span class="v" id="v-servo">-</span></div>
   <div class="cell"><span class="k">ready</span><span class="v" id="v-ready">-</span></div>
   <div class="cell"><span class="k">fault</span><span class="v" id="v-fault">-</span></div>
 </div>
@@ -95,10 +98,12 @@ function connect() {
 // only live where a start is accepted.
 function show(d) {
   byId('v-state').textContent = d.state;
+  byId('v-x').textContent = d.x.toFixed(1) + ' mm';
+  byId('v-psi').textContent = (d.psi / 1000 * 57.2958).toFixed(1) + '\u00b0';
+  byId('v-servo').textContent = d.servo + '\u00b0';
   byId('v-gl').textContent = mm(d.gL);
   byId('v-gr').textContent = mm(d.gR);
   byId('v-rear').textContent = mm(d.rear);
-  byId('v-servo').textContent = d.servo + '\u00b0';
   byId('v-ready').textContent = d.ready ? 'yes' : 'no';
   byId('v-fault').textContent = d.fault;
   button.disabled = !d.ready;
