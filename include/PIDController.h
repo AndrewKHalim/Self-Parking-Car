@@ -41,9 +41,11 @@ inline float PIDController::compute(float error, float dt) {
   // end
 
   const float pTerm = kp_ * error;
+  const float previousIntegral = integral_;
 
-  // The integral is clamped and bleeds away inside the deadband, which keeps a
-  // long reverse from winding it up.
+  // The integral is clamped and bleeds away inside the deadband. The clamp
+  // alone can still wind up against a servo stop, so the rail check below
+  // rolls the update back.
   if (error != 0.0f) {
     integral_ += error * dt;
     integral_ = constrain(integral_, -pid::INTEGRAL_CLAMP,
@@ -51,7 +53,7 @@ inline float PIDController::compute(float error, float dt) {
   } else {
     integral_ *= 0.95f;
   }
-  const float iTerm = ki_ * integral_;
+  float iTerm = ki_ * integral_;
   // end
 
   // The derivative is low passed because the ToF reading is noisy.
@@ -61,12 +63,33 @@ inline float PIDController::compute(float error, float dt) {
   const float dTerm = kd_ * filteredDerivative_;
   // end
 
+  float output = pTerm + iTerm + dTerm;
+
+  // Freeze the integral while the command is against a stop and the error still
+  // pushes that way. Rolling back the update is what stops a long reverse from
+  // winding the integral up behind a railed servo command. An error that pulls
+  // away from the stop is still allowed to unwind it.
+  const int angle = toServoAngle(output);
+  const bool pushingHigh =
+      angle >= servo::MAX_DEG && servo::DIR * error > 0.0f;
+  const bool pushingLow =
+      angle <= servo::MIN_DEG && servo::DIR * error < 0.0f;
+  if (pushingHigh || pushingLow) {
+    integral_ = previousIntegral;
+    iTerm = ki_ * integral_;
+    output = pTerm + iTerm + dTerm;
+  }
+  // end
+
   previousError_ = error;
-  return pTerm + iTerm + dTerm;
+  return output;
 }
 
-// Turn a servo offset into a whole degree inside the mechanical range. DIR
-// carries the steering sign so the owner can flip it in one place.
+// Turn a servo offset into a whole degree inside the mechanical range. The
+// rounding and the DIR multiply each happen once. With DIR at 1 a positive
+// offset commands an angle above centre, which is the direction that should
+// turn the rear toward the car's left. Flip DIR if the linkage turns the other
+// way.
 inline int PIDController::toServoAngle(float offsetDeg) {
   const int angle = servo::CENTRE_DEG + servo::DIR * (int)lroundf(offsetDeg);
   return constrain(angle, servo::MIN_DEG, servo::MAX_DEG);

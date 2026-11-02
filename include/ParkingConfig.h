@@ -42,9 +42,14 @@ constexpr uint8_t ADDR_REAR = 0x2B;
 
 // The side faces look straight across the car, so their readings are the gaps
 // themselves and no sine factor applies. Both faces sit ahead of the rear axle,
-// left 67 mm and right 147 mm. A centring loop does not need those two numbers,
-// but a heading estimate would, so they are recorded here and nothing in this
-// branch derives a heading.
+// left 67 mm and right 147 mm. Because the stations enter the error with
+// opposite signs, the gap difference is not the offset:
+//     gL - gR = 2*x + 0.214*sin(psi)
+// where x is the lateral offset and psi is the yaw. At 5 degrees of yaw the
+// heading term alone is 18.6 mm of false error. The branch keeps main's signal,
+// gL - gR, because there is no heading estimate and the gains are main's. The
+// two station distances are recorded here for a future heading term; nothing in
+// this branch derives a heading.
 namespace geometry {
 constexpr float SENSOR_AHEAD_LEFT_M = 0.067f;
 constexpr float SENSOR_AHEAD_RIGHT_M = 0.147f;

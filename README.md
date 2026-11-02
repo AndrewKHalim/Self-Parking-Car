@@ -175,7 +175,7 @@ The loop runs every 25 ms and prints one telemetry line every 100 ms.
 | state | what it does |
 |---|---|
 | `IDLE` | wheels centred, motor off, waits 2 s |
-| `REVERSE` | PID steers on the lateral error, motor reverses at duty 90, or duty 40 below 160 mm of rear reading |
+| `REVERSE` | PID steers on the lateral error, motor reverses at duty 90, or duty 40 below 160 mm of rear reading, and stops while either side reading is invalid |
 | `PULL_FORWARD` | motor forward at duty 140 for 1.4 s or until the rear reading passes 220 mm, with counter-steer opposite the error sign |
 | `PARKED` | motor off, wheels centred, maneuver over |
 | `EMERGENCY_STOP` | motor off, wheels centred, latched |
@@ -188,15 +188,46 @@ off the wall.
 While the rear reading is inside 160 mm, a lateral error larger than 10 mm asks
 for a pull forward. The car backs out, moves forward with the wheels turned
 against the error, and returns to `REVERSE`. The pull-forward count is capped at
-3, so a wall that cannot be reached does not keep the car hunting.
+3, so a wall that cannot be reached does not keep the car hunting. The pull
+forward ends after 1.4 s or as soon as the rear reading passes 220 mm, and both
+ends use the same `PULL_FORWARD_EXIT_M` constant.
 
 Any valid reading under 40 mm stops the car and latches `EMERGENCY_STOP`. Power
 cycle the board to clear it.
 
+If either side reading goes invalid during the reverse, the motor stops and the
+wheels centre until both readings return. The last valid lateral error is kept
+rather than replaced with a zero, but the control law does not run on stale
+feedback. No nominal clearance is invented. A side dropout during a pull
+forward ends that pull forward and returns to the reverse, where the car stops.
+
+## How this differs from main
+
+`simple` keeps `main`'s shape, but not every line of it. The table lists each
+behaviour that differs and says whether it is a change for this car or a defect
+in `main` that was fixed.
+
+| behaviour | main | simple | verdict |
+|---|---|---|---|
+| pins and driver | L298N on 16/17 and 14/13, servo 7 | DRV8833 on 4/5 and 6/7, servo 11 | keep: this car |
+| sensor mounting, addresses and bring-up | angled faces, addresses 0x30/0x31/0x32, left then right then rear | faces straight across, addresses 0x29/0x2A/0x2B, rear then right then left | keep: this car |
+| sensor filtering | EMA on every channel, readings capped at 150 cm | raw continuous reads, last valid value held, 8190 and 65535 rejected | keep: simplification |
+| lateral error, both sides valid | projected side gaps in centimetres | `gL - gR` in metres, including the heading leak in Sensor geometry | keep: main's signal |
+| lateral error, one side invalid | fixed 12 cm nominal clearance | hold the last valid error and stop the drive until both sides return | fix: both fallbacks were unsafe |
+| rear stop | filtered or raw reading at or below 7.6 cm | `rearValid` and `gRear` at or below 70 mm | fix: valid readings only, one trigger |
+| pull-forward gate | rear below 13 cm and error above 1.2 cm | rear at or below 160 mm and error above 10 mm | keep: this car, gate at the crawl boundary |
+| pull-forward exit | literal 22 cm while its constant said 26 cm | one 220 mm constant | fix: main defect |
+| integral at the servo stop | clamped but still integrated | frozen while the command is at MIN or MAX and the error pushes there | fix: main defect |
+| emergency stop | only in reverse, resumed when the obstacle cleared | any valid reading under 40 mm, latched | fix: main defect |
+| servo mapping | inverted flag, round then clamp | `DIR` constant, round once, clamp | keep: equivalent |
+| motor stop | analogWrite then digitalWrite on the zero leg | analogWrite on all four pins | fix: core 3.x owns the pin after the first PWM |
+| drive duties | 55 reverse, 10 crawl, 90 forward | 90 reverse, 40 crawl, 140 forward | keep: this car |
+| telemetry and states | centimetres, extra wheel-angle fields, extra BOOT state | metres, no wheel-angle fields, IDLE | keep: simpler |
+
 ## Sensor geometry
 
 The two side faces are perpendicular to the car, not angled. Their readings are
-the left and right gaps themselves, so there is no `sin(45)` factor anywhere.
+the left and right gaps themselves, so no trigonometric projection is applied.
 `gL` and `gR` are the gaps in metres.
 
 The lateral error is `gL - gR`. A positive error means the left gap is larger,
@@ -204,14 +235,24 @@ so the car sits to the right of the bay centre and the rear has to be steered
 toward the left wall. The PID keeps main's sign behaviour.
 
 The two side faces sit ahead of the rear axle: 67 mm on the left and 147 mm on
-the right. A centring-only loop does not need those numbers, so they are
-recorded as constants in `namespace geometry` and nothing derives a heading
-from them. A heading estimate would need them.
+the right. Because the stations enter the error with opposite signs, the gap
+difference is not the offset:
+
+```
+gL - gR = 2*x + 0.214*sin(psi)
+```
+
+Here `x` is the lateral offset and `psi` is the yaw. At 5 degrees of yaw the
+heading term alone is 18.6 mm of false error. This branch keeps main's signal,
+`gL - gR`, because there is no heading estimate and the gains are main's. The
+two station distances are recorded as constants in `namespace geometry` for a
+future heading term. Nothing in this branch derives a heading.
 
 The rear face is the rearmost point of the car, so the rear reading is the tail
 clearance itself. Ranging runs continuously and the loop reads the latest
 result. A reading of 8190 mm or 65535 mm means no target or a timeout, and is
-rejected.
+rejected. Zero is kept as a valid very close reading so it can fire the
+emergency stop.
 
 ## The steering
 
@@ -225,11 +266,19 @@ driven at whole degrees after clamping to the range in `namespace servo`:
 | `MIN_DEG` | 45 | lower clamp |
 | `MAX_DEG` | 135 | upper clamp |
 
+A positive lateral error means the left gap is larger, so the car sits to the
+right of the bay centre and the rear must turn toward the left wall. With `DIR`
+at 1 a positive error commands an angle above 90 degrees. If the wheels turn
+toward the right instead, set `DIR` to `-1`. `toServoAngle` rounds the offset
+once, multiplies by `DIR` once, then clamps to the range.
+
 The lateral PID works in metres and its output is a servo angle offset in
 degrees. The gains are 180, 4.0 and 40, which are `main`'s 1.8, 0.04 and 0.40
 per centimetre rescaled to metres. They are inherited and unverified on this
 car. The deadband is 8 mm, the integral clamp is 25 and the derivative low pass
-is 0.6.
+is 0.6. The integral is frozen while the servo command is at `MIN_DEG` or
+`MAX_DEG` and the error still pushes that way, so a long reverse cannot wind it
+up against a stop.
 
 Two constants have to be calibrated on the car:
 
@@ -259,12 +308,12 @@ correction.
 
 Build-verified only. Nothing on this branch has been flashed or run on the car.
 
-The firmware builds and links for the ESP32-S3 Super Mini at 24,740 bytes of RAM
-(7.6 percent of 327,680) and 363,095 bytes of flash. The application partition
+The firmware builds and links for the ESP32-S3 Super Mini at 24,748 bytes of RAM
+(7.6 percent of 327,680) and 363,203 bytes of flash. The application partition
 is the 4,063,232-byte `app0` from `max_app_4MB.csv`, so the app uses about 8.9
 percent of it. PlatformIO prints 4.3 percent because it divides by the board's
 8 MB `maximum_size`, which is not the figure to quote. The merged
-`releases/autoparking.factory.bin` is 435,200 bytes.
+`releases/autoparking.factory.bin` is 435,312 bytes.
 
 The three bench environments build. The servo, sensor and drive behaviour is
 not observed on hardware in this branch. The servo centre and direction are

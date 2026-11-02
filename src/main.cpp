@@ -29,6 +29,7 @@ ParkingState currentState = STATE_IDLE;
 unsigned long stateStartTime = 0;
 unsigned long lastLoopTime = 0;
 int pullForwardCount = 0;
+float lastLateralError = 0.0f;
 
 void setParkingState(ParkingState newState) {
   currentState = newState;
@@ -95,11 +96,16 @@ void loop() {
 
   const SensorReadings readings = sensorManager.read();
 
-  // The side faces are perpendicular to the car, so the gaps need no trig.
+  // The side faces look straight across the car, so the gaps need no trig.
   // Positive error means the left gap is larger, so the car sits to the right
-  // of the bay centre and the rear has to be steered toward the left wall.
+  // of the bay centre and the rear has to be steered toward the left wall. If a
+  // side drops out, hold the last valid error and stop the drive below. No
+  // nominal clearance is invented.
   const bool bothSides = readings.leftValid && readings.rightValid;
-  const float lateralError = bothSides ? readings.gL - readings.gR : 0.0f;
+  if (bothSides) {
+    lastLateralError = readings.gL - readings.gR;
+  }
+  const float lateralError = lastLateralError;
   // end
 
   // Any valid reading under 40 mm is an emergency. It latches, because a
@@ -127,25 +133,40 @@ void loop() {
     break;
 
   case STATE_REVERSE: {
-    const float pidOutput = pidController.compute(lateralError, dt);
-    servoAngle = PIDController::toServoAngle(pidOutput);
-    steeringServo.write(servoAngle);
-
     // Reaching the rear trigger stops the car and ends the maneuver. The
     // reading is the tail clearance, so the 50 mm the car actually keeps comes
-    // from the 20 mm it rolls on after the drive is cut.
+    // from the 20 mm it rolls on after the drive is cut. A held reading cannot
+    // fire this because rearValid must be true.
     if (readings.rearValid &&
         readings.gRear <= parking::REVERSE_TRIGGER_M) {
       motor.stop();
       steeringServo.write(servo::CENTRE_DEG);
+      servoAngle = servo::CENTRE_DEG;
       setParkingState(STATE_PARKED);
       break;
     }
     // end
 
+    // A missing side reading means the centring loop has no fresh feedback.
+    // The car stops and holds the last valid error instead of driving straight
+    // on a guess. Both readings must return before the reverse resumes. The PID
+    // state is kept so the derivative does not spike when the reading returns.
+    if (!bothSides) {
+      motor.stop();
+      steeringServo.write(servo::CENTRE_DEG);
+      servoAngle = servo::CENTRE_DEG;
+      break;
+    }
+    // end
+
+    const float pidOutput = pidController.compute(lateralError, dt);
+    servoAngle = PIDController::toServoAngle(pidOutput);
+    steeringServo.write(servoAngle);
+
     // Inside the last stretch, a lateral error worth correcting is worth a
     // pull forward. The counter is capped so a wall that cannot be reached
-    // does not keep the car hunting.
+    // does not keep the car hunting. rearValid is required, and bothSides is
+    // already true here.
     if (readings.rearValid && readings.gRear <= parking::CRAWL_BELOW_M &&
         fabsf(lateralError) > parking::ALIGN_TOL_M &&
         pullForwardCount < parking::MAX_PULL_FORWARD) {
@@ -165,6 +186,18 @@ void loop() {
   }
 
   case STATE_PULL_FORWARD: {
+    // A side dropout aborts the pull forward. The car stops, the wheels centre
+    // and the reverse state takes over, where the missing reading keeps it
+    // stopped. The PID state is kept for the same reason as in reverse.
+    if (!bothSides) {
+      motor.stop();
+      steeringServo.write(servo::CENTRE_DEG);
+      servoAngle = servo::CENTRE_DEG;
+      setParkingState(STATE_REVERSE);
+      break;
+    }
+    // end
+
     const float counterSteer = (lateralError > 0.0f)
                                    ? -parking::PULL_FORWARD_STEER_DEG
                                    : parking::PULL_FORWARD_STEER_DEG;
@@ -172,7 +205,8 @@ void loop() {
     steeringServo.write(servoAngle);
     motor.forward(drive::DUTY_FORWARD);
 
-    // The stroke ends on time or as soon as the rear has room again.
+    // The pull forward ends on time or as soon as the rear has room again. A
+    // held rear reading cannot end it because rearValid must be true.
     const bool timedOut = now - stateStartTime >= parking::PULL_FORWARD_MS;
     const bool cleared =
         readings.rearValid && readings.gRear > parking::PULL_FORWARD_EXIT_M;
@@ -180,6 +214,12 @@ void loop() {
       motor.stop();
       steeringServo.write(servo::CENTRE_DEG);
       pidController.reset();
+
+      // main paused briefly here so the gear change does not land while the
+      // car is still rolling forward. The pause is kept.
+      delay(150);
+      // end
+
       setParkingState(STATE_REVERSE);
     }
     // end
@@ -193,9 +233,12 @@ void loop() {
     break;
 
   case STATE_EMERGENCY_STOP:
+    // The state latches. Nothing below transitions out, so only a power cycle
+    // returns to the maneuver.
     motor.stop();
     steeringServo.write(servo::CENTRE_DEG);
     servoAngle = servo::CENTRE_DEG;
+    // end
     break;
 
   default:

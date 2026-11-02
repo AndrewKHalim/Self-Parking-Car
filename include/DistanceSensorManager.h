@@ -81,11 +81,12 @@ inline bool DistanceSensorManager::bringUp(VL53L0X& sensor, int xshut,
 }
 
 // Convert one reading to metres and keep the last good value when the part
-// reports no target or times out.
+// reports no target or times out. Zero is kept as a valid very close reading,
+// so it can fire the emergency stop; only the two library codes are rejected.
 inline float DistanceSensorManager::metres(VL53L0X& sensor, float& held,
                                            bool& valid) {
   const uint16_t mm = sensor.readRangeContinuousMillimeters();
-  valid = mm > 0 && mm != sensor::NO_TARGET_MM && mm != sensor::TIMEOUT_MM;
+  valid = mm != sensor::NO_TARGET_MM && mm != sensor::TIMEOUT_MM;
   if (valid) held = (float)mm * 0.001f;
   return held;
 }
