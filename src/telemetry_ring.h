@@ -14,7 +14,10 @@
 #include <Arduino.h>
 #endif
 
-// Distances are millimetres and angles milliradians, which is what the wire already carries. The sequence number starts at 1 so 0 can mean nothing recorded yet.
+// Distances are millimetres and angles milliradians, which is what the wire
+// already carries. x, psi, clearance and the cap have no source any more, so
+// those columns stay at zero to keep the CSV shape. The sequence number starts
+// at 1 so 0 can mean nothing recorded yet.
 struct Sample {
   uint32_t t_ms = 0;
   int16_t x_mm = 0;
@@ -34,18 +37,15 @@ struct Sample {
 
 static_assert(sizeof(Sample) <= 48, "Sample must stay a compact record");
 
-// The flag byte. A single sensor can be out of range while the pose still uses the last good pair, so each reading has its own bit.
+// The bits that still have a source: whether each reading was usable, and why
+// a run stopped. The pose bits went with the pose, and the two fault bits are
+// the same pair the serial line names.
 constexpr uint8_t SAMPLE_VALID = 1 << 0;
-constexpr uint8_t SAMPLE_CALIBRATED = 1 << 1;
-constexpr uint8_t SAMPLE_REAR_FAULT = 1 << 2;
-constexpr uint8_t SAMPLE_TRAVEL_FAULT = 1 << 3;
-constexpr uint8_t SAMPLE_OUT_OF_SPEC = 1 << 4;
+constexpr uint8_t SAMPLE_REAR_FAULT = 1 << 1;
+constexpr uint8_t SAMPLE_TIMEOUT_FAULT = 1 << 2;
 constexpr uint8_t SAMPLE_LEFT_VALID = 1 << 5;
 constexpr uint8_t SAMPLE_RIGHT_VALID = 1 << 6;
 constexpr uint8_t SAMPLE_REAR_VALID = 1 << 7;
-// The calibration bit is a state, so it stays 8-bit. The fault that ends a run
-// before it starts needs a ninth bit, which is why the flag word is 16-bit.
-constexpr uint16_t SAMPLE_CAL_FAULT = 1 << 8;
 
 // Every row is the same length, so the response filler can find row n from the request offset alone. A value that outgrew its field would shift every later row, so the widths cover the whole integer range behind them.
 constexpr size_t CSV_ROW_LEN = 98;
@@ -65,14 +65,11 @@ inline int16_t sampleMm(float m) {
 inline uint16_t sampleFlags(const Telemetry& t, float gL, float gR, float gRear) {
   uint16_t f = 0;
   if (t.valid) f |= SAMPLE_VALID;
-  if (t.calibrated) f |= SAMPLE_CALIBRATED;
-  if (t.rearFault) f |= SAMPLE_REAR_FAULT;
-  if (t.travelFault) f |= SAMPLE_TRAVEL_FAULT;
-  if (t.calFault) f |= SAMPLE_CAL_FAULT;
-  if (t.outOfSpec) f |= SAMPLE_OUT_OF_SPEC;
-  if (geom::validRange(gL)) f |= SAMPLE_LEFT_VALID;
-  if (geom::validRange(gR)) f |= SAMPLE_RIGHT_VALID;
-  if (geom::validRange(gRear)) f |= SAMPLE_REAR_VALID;
+  if (t.fault == Fault::REAR) f |= SAMPLE_REAR_FAULT;
+  if (t.fault == Fault::TIMEOUT) f |= SAMPLE_TIMEOUT_FAULT;
+  if (validReading(gL)) f |= SAMPLE_LEFT_VALID;
+  if (validReading(gR)) f |= SAMPLE_RIGHT_VALID;
+  if (rearValidReading(gRear)) f |= SAMPLE_REAR_VALID;
   return f;
 }
 
@@ -89,12 +86,15 @@ class TelemetryRing {
     s.rear_mm = sampleMm(t.rear);
     s.gL_mm = sampleMm(t.gL);
     s.gR_mm = sampleMm(t.gR);
-    s.clearance_mm = sampleMm(t.clearance);
-    s.psi_cap_mrad = sampleMm(t.psiCap);
+    // The pose is gone, so the clearance and the cap column stay at zero and
+    // keep their place in the CSV.
+    // end
+    s.clearance_mm = 0;
+    s.psi_cap_mrad = 0;
     s.servo_deg = (int16_t)lroundf(t.servo);
     s.strokes = (uint16_t)t.strokes;
     s.phase = (uint8_t)t.phase;
-    s.stroke = (uint8_t)t.stroke;
+    s.stroke = 0;
     s.flags = sampleFlags(t, t.gL, t.gR, t.rear);
 
     lock();

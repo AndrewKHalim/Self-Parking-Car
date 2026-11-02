@@ -44,20 +44,16 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(<!doctype html>
 
 <div class="grid">
   <div class="cell"><span class="k">t</span><span class="v" id="v-t">-</span></div>
-  <div class="cell"><span class="k">x</span><span class="v" id="v-x">-</span></div>
-  <div class="cell"><span class="k">psi</span><span class="v" id="v-psi">-</span></div>
   <div class="cell"><span class="k">gL</span><span class="v" id="v-gl">-</span></div>
   <div class="cell"><span class="k">gR</span><span class="v" id="v-gr">-</span></div>
   <div class="cell"><span class="k">rear</span><span class="v" id="v-rear">-</span></div>
   <div class="cell"><span class="k">servo</span><span class="v" id="v-servo">-</span></div>
   <div class="cell"><span class="k">phase</span><span class="v" id="v-phase">-</span></div>
+  <div class="cell"><span class="k">fault</span><span class="v" id="v-fault">-</span></div>
   <div class="cell"><span class="k">strokes</span><span class="v" id="v-strokes">-</span></div>
-  <div class="cell"><span class="k">calibrated</span><span class="v" id="v-cal">-</span></div>
 </div>
 
 <div class="legend">
-  <span><i style="background:#4c9aff"></i>x</span>
-  <span><i style="background:#ffb020"></i>psi</span>
   <span><i style="background:#5fd38b"></i>servo</span>
 </div>
 <canvas id="chart"></canvas>
@@ -65,17 +61,16 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(<!doctype html>
 <button id="start" disabled>start</button>
 
 <script>
-// The firmware sends integers. t in ms, x and gaps in mm, psi in milliradians, servo in degrees. The page converts for display only.
-const MRAD_TO_DEG = 180 / Math.PI / 1000;
+// The firmware sends integers. t in ms, the gaps in mm, servo in degrees. The
+// pose is gone, so there is no x or psi to convert.
 const OUT_OF_RANGE_MM = 8000;
 const MAX_POINTS = 1200;
 const T_SPAN_MS = 20000;
 
-// Fixed ranges per axis. Peak normalisation made two runs incomparable and hid how large an excursion was, and the servo is on its own band because its degrees are not millimetres.
+// One band for the servo, the only quantity the page can still plot. Fixed
+// ranges let two runs be compared by eye.
 const AXES = [
-  { key: 'x', caption: 'x mm', min: -80, max: 80, colour: '#4c9aff', pose: true },
-  { key: 'psi', caption: 'psi deg', min: -30, max: 30, colour: '#ffb020', pose: true },
-  { key: 'servo', caption: 'servo deg', min: 10, max: 170, colour: '#5fd38b', pose: false }
+  { key: 'servo', caption: 'servo deg', min: 10, max: 170, colour: '#5fd38b' }
 ];
 
 // One record per sample, in time order. The CSV seeds it with up to 34 s of run, and the socket appends only what is newer.
@@ -111,22 +106,21 @@ function connect() {
   };
 }
 
-// One message is one sample. The button follows what the control task will accept. A start needs the calibration and cannot arrive during a run.
+// One message is one sample. A start is always accepted, so the button is only
+// held down while the car is already reversing or pulling.
 function show(d) {
   byId('v-t').textContent = (d.t / 1000).toFixed(1) + ' s';
-  byId('v-x').textContent = d.x + ' mm';
-  byId('v-psi').textContent = (d.psi * MRAD_TO_DEG).toFixed(1) + '\u00b0';
   byId('v-gl').textContent = d.gL >= OUT_OF_RANGE_MM ? 'none' : d.gL + ' mm';
   byId('v-gr').textContent = d.gR >= OUT_OF_RANGE_MM ? 'none' : d.gR + ' mm';
   byId('v-rear').textContent = d.rear >= OUT_OF_RANGE_MM ? 'far' : d.rear + ' mm';
   byId('v-servo').textContent = d.servo + '\u00b0';
   byId('v-phase').textContent = d.phase;
+  byId('v-fault').textContent = d.fault;
   byId('v-strokes').textContent = d.strokes;
-  byId('v-cal').textContent = d.cal ? 'yes' : 'no';
-  button.disabled = !d.cal || d.phase === 'calibrate' || d.phase === 'back_in' || d.phase === 'pull';
+  button.disabled = d.phase === 'back_in' || d.phase === 'pull';
 
   if (d.t <= seededT) return;
-  pts.push({ t: d.t, x: d.x, psi: d.psi * MRAD_TO_DEG, servo: d.servo, pose: !!d.valid });
+  pts.push({ t: d.t, servo: d.servo });
   if (pts.length > MAX_POINTS) pts.shift();
   draw();
 }
@@ -158,10 +152,7 @@ function seed() {
         if (!Number.isFinite(t)) continue;
         seeded.push({
           t,
-          x: Number(f[1]),
-          psi: Number(f[2]) * MRAD_TO_DEG,
-          servo: Number(f[8]),
-          pose: (Number(f[12]) & 1) === 1
+          servo: Number(f[8])
         });
       }
       if (!seeded.length) {
@@ -239,7 +230,6 @@ function draw() {
     let started = false;
     for (const p of pts) {
       if (p.t < tMin || p.t > tMax) continue;
-      if (a.pose && !p.pose) { started = false; continue; }
       const v = Math.min(a.max, Math.max(a.min, p[a.key]));
       if (!started) { ctx.moveTo(px(p.t), py(v)); started = true; }
       else ctx.lineTo(px(p.t), py(v));
@@ -260,7 +250,8 @@ function draw() {
 
 window.addEventListener('resize', draw);
 
-// The start request is a plain fetch. The control task decides, and it refuses one before the calibration and ignores one while a run is in progress.
+// The start request is a plain fetch. The control task begins the reverse on the
+// next tick, so there is nothing for the page to gate.
 button.addEventListener('click', () => {
   button.disabled = true;
   fetch('/start').catch(() => {});

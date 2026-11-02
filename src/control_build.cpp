@@ -1,6 +1,6 @@
-// Compile check for the control core. Geometry and the supervisor against a
-// plain config, with no HAL attached. A signature change breaks the build here
-// instead of changing behaviour on the car.
+// Compile check for the control core. The supervisor against a plain config,
+// with no HAL attached. A signature change breaks the build here instead of
+// changing behaviour on the car.
 
 #include "supervisor.h"
 
@@ -9,15 +9,8 @@
 volatile float controlBuildSink = 0.0f;
 
 void controlBuildCheck() {
-  Config cfg;
   Supervisor sup;
-  sup.cfg = cfg;
-
-  const geom::Pose p = geom::pose(cfg, 0.25f, 0.25f);
-  const float clear = geom::clearance(cfg, 0.25f, 0.25f);
-
   sup.start();
   sup.update();
-
-  controlBuildSink = p.x + p.psi + clear + sup.tel.x;
+  controlBuildSink = sup.tel.rear + sup.tel.servo;
 }

@@ -33,7 +33,7 @@ constexpr UBaseType_t WEB_PRIORITY = 2;
 // The handoff. One item, overwritten by the producer, so the consumer cannot fall behind and a slow socket cannot delay the control loop.
 static QueueHandle_t telemetryQueue = nullptr;
 
-// The only word crossing the other way, and it is a request. The control task still refuses it before the calibration and during a run.
+// The only word crossing the other way, and it is a request. A start always begins the reverse on the next tick.
 static std::atomic<bool> startRequest{false};
 
 static AsyncWebServer server(80);
@@ -43,46 +43,25 @@ static Esp32Hal hal;
 // The run, kept on the board so a reload or a dropped socket does not lose it. The control task writes one record per tick and the web side reads it behind the ring's lock.
 static TelemetryRing runLog;
 
-static const char* phaseName(Phase p) {
-  switch (p) {
-    case Phase::IDLE: return "idle";
-    case Phase::CALIBRATE: return "calibrate";
-    case Phase::BACK_IN: return "back_in";
-    case Phase::PULL: return "pull";
-    case Phase::DONE: return "done";
-    case Phase::GIVEUP: return "giveup";
-  }
-  return "unknown";
-}
-
-// One JSON object per message, numeric fields as integers. t is ms, x, rear, travel, clearance, gL and gR are mm, psi, cap, peak are milliradians, servo degrees. seq is the ring record this sample came from, so the page can line it up with the CSV. strokes is the correction count.
+// One JSON object per message, numeric fields as integers. t is ms, rear, gL and gR are mm, servo degrees, and x and psi stay at zero because the pose is gone. fault names why a run gave up. seq is the ring record this sample came from, so the page can line it up with the CSV. strokes is the correction count.
 static void publishTelemetry(const Telemetry& t, uint32_t seq) {
   if (socket.count() == 0) return;
 
-  static char line[384];
+  static char line[320];
   snprintf(line, sizeof(line),
            "{\"t\":%lu,\"x\":%ld,\"psi\":%ld,\"rear\":%ld,\"servo\":%d,"
-           "\"phase\":\"%s\",\"stroke\":\"none\",\"strokes\":%d,"
-           "\"cal\":%d,\"valid\":%d,\"travel\":%ld,\"cap\":%ld,"
-           "\"clear\":%ld,\"peak\":%ld,\"gL\":%ld,\"gR\":%ld,\"seq\":%lu,"
-           "\"rearFault\":%d,\"travelFault\":%d,\"calFault\":%d,"
-           "\"outOfSpec\":%d}",
+           "\"phase\":\"%s\",\"fault\":\"%s\",\"strokes\":%d,\"valid\":%d,"
+           "\"gL\":%ld,\"gR\":%ld,\"seq\":%lu}",
            (unsigned long)(t.t * 1000.0f),
            (long)lroundf(t.x * 1000.0f),
            (long)lroundf(t.psi * 1000.0f),
            (long)lroundf(t.rear * 1000.0f),
            (int)lroundf(t.servo),
-           phaseName(t.phase), t.strokes,
-           (int)t.calibrated, (int)t.valid,
-           (long)lroundf(t.travel * 1000.0f),
-           (long)lroundf(t.psiCap * 1000.0f),
-           (long)lroundf(t.clearance * 1000.0f),
-           (long)lroundf(t.peakYaw * 1000.0f),
+           phaseName(t.phase), faultName(t.fault), t.strokes,
+           (int)t.valid,
            (long)lroundf(t.gL * 1000.0f),
            (long)lroundf(t.gR * 1000.0f),
-           (unsigned long)seq,
-           (int)t.rearFault, (int)t.travelFault, (int)t.calFault,
-           (int)t.outOfSpec);
+           (unsigned long)seq);
   socket.textAll(line);
 }
 
@@ -134,29 +113,23 @@ static void controlTask(void* arg) {
 
   for (;;) {
     if (startRequest.exchange(false)) {
-      const bool running = sup.phase == Phase::CALIBRATE ||
-                           sup.phase == Phase::BACK_IN ||
-                           sup.phase == Phase::PULL;
-      if (running) {
-        Serial.println("start ignored: run in progress");
-      } else {
-        sup.start();
-        Serial.println("start");
-      }
+      sup.start();
+      Serial.println("start");
     }
 
     sup.update();
     runLog.record(sup.tel);
 
-    // 10 Hz, every third 30 Hz tick, so a run reads on the serial line with no browser open. Units are spelled into the field names because a screenshot has no caption.
+    // 10 Hz, every third 30 Hz tick, so a run reads on the serial line with no browser open. Units are spelled into the field names because a screenshot has no caption. x and psi stay at zero because the pose is gone, and fault names why a run gave up.
     static uint32_t tick = 0;
     if (++tick % 3 == 0) {
-      Serial.printf("%7.2fs %-9s %-9s x=%+6.1f psi=%+6.1f rear=%6.1f gL=%6.1f gR=%6.1f servo=%5.1f cal=%d ok=%d strokes=%d\n",
-                    sup.tel.t, phaseName(sup.tel.phase), "NONE",
+      Serial.printf("%7.2fs %-9s x=%+6.1f psi=%+6.1f rear=%6.1f gL=%6.1f gR=%6.1f servo=%5.1f ok=%d strokes=%d fault=%s\n",
+                    sup.tel.t, phaseName(sup.tel.phase),
                     sup.tel.x * 1000.0f, sup.tel.psi * 57.2958f,
                     sup.tel.rear * 1000.0f, sup.tel.gL * 1000.0f,
                     sup.tel.gR * 1000.0f, sup.tel.servo,
-                    (int)sup.tel.calibrated, (int)sup.tel.valid, sup.tel.strokes);
+                    (int)sup.tel.valid, sup.tel.strokes,
+                    faultName(sup.tel.fault));
     }
 
     xQueueOverwrite(telemetryQueue, &sup.tel);
@@ -238,6 +211,19 @@ void setup() {
   delay(100);
   Serial.println();
   Serial.println("autoparking-car: boot");
+
+  // One line names every value that decides a move, so a serial capture shows
+  // what this firmware was configured to do before the car is started.
+  // end
+  const Config boot;
+  Serial.printf("maneuver reverse=%u stroke=%u pull_angle=%.0f centre=%.0f pull_fwd=%ums pull_rev=%ums back_in_max=%ums trigger=%.0fmm corrections=%d\n",
+                (unsigned)boot.reverse_duty, (unsigned)boot.stroke_duty,
+                boot.pull_angle_deg, servo::CENTRE_DEG,
+                (unsigned)boot.pull_forward_ms,
+                (unsigned)boot.pull_reverse_ms,
+                (unsigned)boot.back_in_max_ms,
+                (boot.rear_target + boot.d_stop + boot.rear_margin) * 1000.0f,
+                boot.corrections_max);
 
   // The hardware comes up before either worker exists, since the bus and the address assignment are not safe to share with a task already reading them.
   if (!hal.begin()) Serial.println("one or more sensors did not answer");

@@ -18,7 +18,6 @@ struct Hal {
 
   // 1 forward, -1 reverse, 0 brake. Duty is 0 to 255 and ignored when dir is 0.
   // Both drivers share a truth table, so the firmware does not branch on which
-  // is fitted, and the simulator ignores the duty because its plant takes the
-  // speed from Config::speed.
+  // is fitted. There is no speed estimate: the duty is the speed.
   virtual void setMotor(int dir, uint8_t duty = 255) = 0;
 };

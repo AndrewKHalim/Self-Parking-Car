@@ -67,7 +67,7 @@ struct Esp32Hal : Hal {
   }
 
   void readSensors(float& gL, float& gR, float& gRear) override {
-    // Millimetres to metres, no clamping. 8190 for no target and 65535 for a timeout both land outside geom::validRange, which is what the core wants.
+    // Millimetres to metres, no clamping. 8190 for no target and 65535 for a timeout both land outside validReading, which is what the core wants.
     gL = metres(left.readRangeContinuousMillimeters());
     gR = metres(right.readRangeContinuousMillimeters());
     gRear = metres(rear.readRangeContinuousMillimeters());
@@ -85,7 +85,7 @@ struct Esp32Hal : Hal {
   void setMotor(int dir, uint8_t duty = 255) override {
     // Both channels take the same direction, each with its own inversion, so the
     // car tracks straight on paper. A curve here is motor mismatch, which belongs
-    // in telemetry and not in a trim.
+    // in telemetry and not in a steering correction.
     driveChannel(board::PIN_MOTOR_IN1, board::PIN_MOTOR_IN2, dir, duty, board::INVERT_LEFT_MOTOR);
     driveChannel(board::PIN_MOTOR_B1, board::PIN_MOTOR_B2, dir, duty, board::INVERT_RIGHT_MOTOR);
   }
