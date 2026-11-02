@@ -1,13 +1,14 @@
 // Servo sweep for measuring the steering linkage. It drives the servo signal
 // with the LEDC peripheral directly, so the bench project stays free of
-// libraries, and steps the command through the range the control law uses,
-// printing each angle and the pulse it sends.
+// libraries, and steps the command through the range main drove, printing each
+// angle and the pulse it sends.
 //
-// The point is the two numbers the firmware does not have: which command puts
-// the wheels straight, and how far the wheels turn for 25 degrees of servo. The
-// control law works in wheel angle and writes servo degrees as if the two were
-// the same, so a crown and rack in between makes its output too small by the
-// ratio.
+// The firmware scales a wheel angle by 2.9 before it writes, and that 2.9 comes
+// from the CAD and not from the car. This sweep is what replaces it: watch where
+// the wheels come straight, and how far they turn between the two ends.
+//
+// The pulse map is the one the firmware attaches with, 544 to 2400 us over 0 to
+// 180 degrees, so a pulse printed here means the same thing on the car.
 
 #include <Arduino.h>
 
@@ -16,17 +17,18 @@
 constexpr int PIN = board::PIN_SERVO;
 constexpr uint32_t LEDC_HZ = 50;
 constexpr uint8_t LEDC_BITS = 16;
-constexpr uint32_t DWELL_MS = 1500;
+constexpr uint32_t DWELL_MS = 1000;
 
-// The command range the control law can produce. Widen it only after checking
-// that the knuckles do not hit their stops inside it, because a servo stalled
-// against a stop pulls about an amp off the shared 5 V rail.
-constexpr int LO_DEG = 65;
-constexpr int HI_DEG = 115;
+// main's clamped range, 45 to 135 degrees, which is where its servo drove
+// without hitting a stop. The current loop asks up to 151, so if 135 turns out
+// to be the mechanical end, delta_max and the wheel ratio both have to come
+// down. Widen only after checking the knuckles clear their stops.
+constexpr int LO_DEG = 45;
+constexpr int HI_DEG = 135;
 constexpr int STEP_DEG = 5;
 
-// 1000 to 2000 us over 0 to 180 degrees, the table the firmware attaches with.
-static uint32_t pulseUs(int deg) { return 1000UL + (uint32_t)deg * 1000UL / 180UL; }
+// 544 to 2400 us over 0 to 180 degrees, the library default the firmware attaches with.
+static uint32_t pulseUs(int deg) { return 544UL + (uint32_t)deg * 1856UL / 180UL; }
 
 static void command(int deg) {
   const uint32_t us = pulseUs(deg);
