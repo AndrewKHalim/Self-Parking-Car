@@ -1,22 +1,31 @@
 # Self-parking-car
 
-A small RC car reverses into a perpendicular parking bay, lines itself up with the bay walls and stops before the rear obstacle. The steering is closed loop, the step response is logged by a host rig, and a web dashboard shows the live state and a graph.
+A small RC car reverses into a perpendicular parking bay, centres itself
+between the two side walls and stops before the rear wall. Three VL53L0X
+time-of-flight sensors feed one loop, one PID on the lateral error and a small
+state machine. Telemetry is one serial line at 10 Hz. There are no tasks, no
+web server and no dashboard on this branch.
 
-The car uses VL53L0X time-of-flight sensors for autonomous reverse parking. The steering is described as Ackermann, and the control code runs either kind of steering until someone measures the chassis.
+The branch is `simple`. It rebuilds the firmware in the shape of `main` with
+the pins, sensor geometry and thresholds of this car. `f4dca` keeps the older
+control core, the dashboard and the host simulator.
 
 ## The hardware
 
 | part | spec | notes |
 |---|---|---|
 | MCU | ESP32-S3 Super Mini | 4MB flash, 240MHz dual core, native USB-C, module soldered to the board |
-| ToF sensors | 3x VL53L0X | must be VL53L0X, not VL53L1X. they are not drop-in compatible and use a different library. two face out sideways, one faces back |
+| ToF sensors | 3x VL53L0X | must be VL53L0X, not VL53L1X. they are not drop-in compatible and use a different library. two face straight out sideways, one faces back |
 | steering servo | SG90 or MG996R | the MG996R has less backlash, which matters here |
 | motor driver | DRV8833 module | a TB6612FNG also works and gives a clean sleep between runs |
 | drive motor | stock Tamiya yellow motor, 6V rated | |
 | chassis | Tamiya RC chassis with servo bay | the stock knuckle is turned by the drive motor through a plastic arm, so it cannot take a commanded angle and the chassis is converted to servo steering |
 | power | one 5 V rail for the whole car | the ESP32, the DRV8833 VM pin and the servo share it. The stock 6 V motor sees about 4.5 V at the driver's dropout, so the reverse duty has to be high enough for it to break away from rest. The DRV8833 is rated to 10.8 V, so VM must never be fed from a 3S pack directly |
 
-The three sensors are addressed over one I2C bus. Each one is enabled in turn through its XSHUT line and given an address: `0x29` left, `0x2A` right, `0x2B` rear.
+The three sensors are addressed over one I2C bus. Each one is enabled in turn
+through its XSHUT line and given an address: `0x29` left, `0x2A` right, `0x2B`
+rear. All three power up at `0x29`, so they are released one at a time and the
+left sensor, which keeps `0x29`, comes up last.
 
 ### Pin map
 
@@ -31,11 +40,35 @@ The three sensors are addressed over one I2C bus. Each one is enabled in turn th
 | 8 | I2C SDA |
 | 9 | I2C SCL |
 | 10 | VL53L0X rear XSHUT |
-| 11 | steering servo signal, 50Hz, 1000 to 2000µs |
+| 11 | steering servo signal, 50Hz, library default pulse map |
 
-The table is the harness as it stands. Every pin in it, the two inversion flags, the three sensor addresses and the sensor timing live in `control/config.h` under `namespace board`, so a measured change touches one file.
+The table is the harness as it stands. Every pin in it, the two inversion flags
+and the three sensor addresses live in `include/ParkingConfig.h` under
+`namespace board`, so a measured change touches one file.
 
-Leave GPIO 26 to 32 alone: the in-package flash claims them. GPIO 19 and 20 are the USB pins, GPIO 43 and 44 are UART0, and GPIO 0, 3, 45 and 46 are strapping pins that are sampled at boot. GPIO 9, 10 and 11 are FSPI IO MUX pins, safe here only because nothing on this board drives SPI2.
+Leave GPIO 26 to 32 alone: the in-package flash claims them. GPIO 19 and 20 are
+the USB pins, GPIO 43 and 44 are UART0, and GPIO 0, 3, 45 and 46 are strapping
+pins that are sampled at boot. GPIO 9, 10 and 11 are FSPI IO MUX pins, safe here
+only because nothing on this board drives SPI2.
+
+## The platform
+
+`platformio.ini` pins a pioarduino espressif32 release by URL rather than by a
+registry version. The registry `espressif32` platform ships Arduino core 2.x,
+which is not the core this car was brought up on. The pinned release is
+55.03.312, Arduino core 3.3.12.
+
+The board definition is `esp32-s3-devkitc-1`, with three overrides for the
+Super Mini: `qio_qspi` memory type, 4 MB of flash and the
+`max_app_4MB.csv` partition table. `-DBOARD_HAS_PSRAM` puts the 2 MB of
+in-package PSRAM on the heap, and the two USB flags put `Serial` on the USB CDC
+port at boot.
+
+Two things are not negotiable. Do not write into `~/.platformio/packages/`, and
+do not remove `lib/Network/` or its `library.json`. Arduino core 3.3.12 ships
+`Network` without a PlatformIO manifest, so the vendored copy is what makes the
+library resolve. It is committed source, not a symlink, because an absolute
+symlink into one machine's package tree does not resolve anywhere else.
 
 ## Instructions
 
@@ -48,7 +81,9 @@ curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
 .venv/bin/pio run
 ```
 
-The first build pulls the pinned platform and the toolchain, about 4GB and a few minutes. After that a build takes seconds. Each machine needs its own `~/.platformio`, because it lives under `$HOME`.
+The first build pulls the pinned platform and the toolchain, about 4GB and a few
+minutes. After that a build takes seconds. Each machine needs its own
+`~/.platformio`, because it lives under `$HOME`.
 
 If `pio` stops before it compiles anything with
 
@@ -56,7 +91,7 @@ If `pio` stops before it compiles anything with
 Error: Failed to install Python dependencies into penv
 ```
 
-Then PlatformIO's own environment needs pip:
+then PlatformIO's own environment needs pip:
 
 ```bash
 curl -fsSL https://bootstrap.pypa.io/get-pip.py -o /tmp/get-pip.py
@@ -101,243 +136,137 @@ The four separate images work too, if they are what you have:
 
 Check the write with `verify_flash 0x0 autoparking.factory.bin` in place of
 `write_flash`, or open the USB CDC console at 115200 and watch for the
-`autoparking-car: boot` line. After the reset the board takes about 15 s to
-give up on the configured network before its access point appears; see the next
-section.
+`autoparking-car: simple branch` line.
 
-`lib/Network/src` is committed source with a hand-written `library.json` beside it, because Arduino core 3.3.12 ships `Network` without one and PlatformIO will not link it. Leave it as it is: a symlink into `~/.platformio/packages/` resolves on the machine that made it and nowhere else.
+#### The bench project
 
-#### Bench drive test
-
-`bench/` is a separate PlatformIO project, so it does not touch the parking firmware, its environment or its config. It has no sensors, no servo and no radio: it drives both motors forward at duty 200 the moment the board is powered and keeps driving until the power is cut, which is what to flash when the question is only whether the drive works. The pin map and the two inversion flags still come from `control/config.h`, so a rewiring carries over.
+`bench/` is a separate PlatformIO project, so it does not touch the parking
+firmware or its environment. It links no libraries and takes the pin map and the
+inversion flags from `include/ParkingConfig.h`.
 
 ```bash
 cd bench
-../.venv/bin/pio run                    # -> .pio/build/motor_test/firmware.factory.bin
-../.venv/bin/pio run -t upload          # or flash it with esptool as in section 2
+../.venv/bin/pio run -e motor_test -e i2c_scan -e servo_sweep
 ```
 
-If the car pulls away backwards, the inversion flag for that side is wrong. If it does not move at all, the fault is in the motor wiring, the driver's power or its VM rail, and not the parking logic.
+`env:motor_test` drives both motors forward at duty 200 from `setup()` and keeps
+driving until the power is cut. It is what to flash when the only question is
+whether the drive works. If the car pulls away backwards, the inversion flag for
+that side is wrong. If it does not move at all, the fault is in the motor wiring,
+the driver's power or its VM rail, and not the parking logic.
 
-The project also builds a steering sweep, `env:servo_sweep`, which steps the servo through 65 to 115 degrees in 5 degree steps, 1.5 s apart, and prints each angle with the pulse it sends. It is how the straight-ahead command and the wheel angle per servo degree are measured, because the control law works in wheel angle and writes servo degrees as if the two were equal.
+`env:i2c_scan` drives the three XSHUT lines high, prints the idle voltage of
+GPIO 8 and 9 on the ADC, then scans with SDA on GPIO 8 and SCL on GPIO 9, closes
+the bus, prints the levels again, and rescans with the two swapped. A device at
+`0x29` with the pins as wired and nothing when swapped means the bus is healthy
+and the wiring is right. The other way round means the two lines are crossed.
+Nothing in either scan means no sensor is powered or out of reset.
 
-The same project builds an I2C scan, which is what to flash when the sensors do not answer:
-
-```bash
-cd bench
-../.venv/bin/pio run -e i2c_scan
-```
-
-It drives the three XSHUT lines high, prints the idle voltage of GPIO 8 and 9 read on the ADC, then scans with SDA on GPIO 8 and SCL on GPIO 9, closes the bus, prints the levels again, and rescans with the two swapped. A device at `0x29` with the pins as wired and nothing when swapped means the bus is healthy and the wiring is right. The other way round means the two lines are crossed. Nothing in either scan means no sensor is powered or out of reset, which is a different fault from a crossed bus. On the levels, a line near 0 mV is held low, a few hundred is floating with no pull-up, and 3300 or more is a live pull-up, a 5 V rail included.
-
-### 3. The network and the dashboard
-
-The firmware joins the network named in `src/wifi_config.h`: put the SSID and the password there, or leave the placeholders and let it fall back. The join is bounded at 15 s, after which the car brings up its own access point:
-
-| SSID| password | page |
-|---|---|---|
-| `autoparking` | `autoparking` | `http://192.168.4.1/` |
-
-The page shows the live state and a chart of the last 1200 samples, and the button asks the control task to start a run. The readout cells are t, x, psi, the left and right side gaps, the rear gap, the servo command, the phase, the stroke count and the calibration flag. The chart carries three labelled series against time in seconds, x in mm, psi in degrees and the servo in degrees, each on a fixed axis. The page seeds itself from `/log.csv` on load and on every reconnect, so a reload does not lose the run, and the board holds 34 s of it. Telemetry goes to the page over a WebSocket at `/ws`, about ten messages a second.
-
-### 4. The host simulator
-
-No board needed. The control core has no hardware calls in it, so the same code runs on the host.
-
-```bash
-mkdir -p build
-g++ -std=c++17 -O2 -Wall -Wextra -Icontrol -o build/sim tools/sim_main.cpp -lm
-g++ -std=c++17 -O2 -Wall -Wextra -Icontrol -o build/geom_checks tools/geom_checks.cpp -lm
-
-./build/geom_checks                             # the sensor geometry
-./build/sim --x 0.04 --psi 5 --trace            # one scenario, traced
-./build/sim --x 0.04 --psi 5 --steer ackermann  # the other steering model
-python3 tools/sweep.py --out build/sweep.csv    # the parameter sweep
-```
-
-## The step response
-
-The controlled variable is the rear axle lateral offset `x`, the state the parking supervisor regulates. `tools/step_rig.cpp` steps the reference from 0 to 40 mm while the car reverses at a constant speed, through the real `Control::step` and the same servo and bicycle model the simulator uses. One sample per 30 Hz control tick, and the figures come from that CSV.
-
-![lateral step response at 0.08 m/s](docs/step_response.png)
-
-![lateral step response at the nominal 0.15 m/s](docs/step_response_015.png)
-
-The 0.08 m/s run is the settling case. The 2 percent band is 0.80 mm around the 40 mm reference. At the nominal 0.15 m/s the dead zone from the 1.8 degree servo dead band is 2.35 mm, wider than that band, so the position limit-cycles between about 37.7 and 42.1 mm and does not settle.
-
-| metric | 0.08 m/s | 0.15 m/s |
-|---|---|---|
-| rise time, 10 to 90 % | 2.64 s | 2.11 s |
-| overshoot | 0.00 % | 5.30 % |
-| settling, 2 % band | 5.47 s | not settled |
-| steady-state error, last 1 s | -0.65 mm (-1.61 %) | -0.31 mm (-0.79 %) |
-| peak steering command | 24.98 deg | 24.98 deg |
-| peak heading | 12.68 deg | 7.97 deg |
-
-What the numbers assume:
-
-- Simulation, not hardware. Nothing here is a measurement.
-- The rig measures `x` directly. It has no ToF geometry, cone, range failures, sensor latency, walls or clearance cap, and no parking supervisor in the loop.
-- The servo numbers are the SG90 datasheet figures already in `Config`: 600 deg/s at no load (0.10 s per 60 degrees at 4.8 V), and a 1.8 degree dead band mapped through the 1000 to 2000 us position table.
-- The servo model is dead band plus slew only: no load, no backlash, no compliance, no position feedback.
-- The figures use the default parallel steering and the 25 degree mechanical limit. Ackermann would clamp to `deltaEqMax`, about 20 degrees.
-- Constant speed. The drive ramp is not modelled, because `accel` is a simulator field and not a `Config` value, so the car starts at the configured speed.
-- The speed is commanded constant, but the parallel scrub term bleeds it over the run, -0.080 to -0.07795 m/s and -0.150 to -0.14862 m/s. The controller is fed the nominal speed.
-- No measurement noise. The seed is fixed at 1, and `--noise` adds Gaussian noise on `x` for a repeatable noisy run.
-- 30 Hz control, with the plant substepped at 1 ms.
-- The integral gain is zero (`ki = 0`), so there is no integral action to trim the offset the dead band leaves. The measured residual is 1.61 percent at 0.08 m/s and 0.79 percent at 0.15 m/s.
-- The run starts at `x = 0`, the parking target, in free space with psi and delta at zero, and the step lands at 1.0 s.
-
-Reproduce both runs and the plots:
-
-```bash
-mkdir -p build docs
-g++ -std=c++17 -O2 -Wall -Wextra -Icontrol -o build/step_rig tools/step_rig.cpp -lm
-
-./build/step_rig --speed 0.08 --ref 0.04 --duration 15
-.venv-plot/bin/python tools/step_plot.py
-
-./build/step_rig --speed 0.15 --ref 0.04 --duration 20 \
-    --out docs/nominal_step_response.csv \
-    --servo-out build/nominal_servo.csv \
-    --info-out build/nominal_run_info.txt
-.venv-plot/bin/python tools/step_plot.py \
-    --csv docs/nominal_step_response.csv \
-    --info build/nominal_run_info.txt \
-    --suffix _015 --note "nominal speed" --window 19
-```
-
-The plot script needs matplotlib in a throwaway venv. This is not the repo venv, and `.venv-plot/` is ignored:
-
-```bash
-python3 -m venv .venv-plot
-.venv-plot/bin/pip install -r tools/plot-requirements.txt
-```
-
-The SVG versions of the figures sit beside the PNGs. The longer note, with the plant, the reference hook and the assumptions, is [docs/step-response.md](docs/step-response.md).
-
-## The dashboard and the web server
-
-| file | what is in it |
-|---|---|
-| `src/main.cpp` | the runtime: the two FreeRTOS tasks and the handoff between them |
-| `src/esp32_hal.h` | the ESP32 `Hal`: three VL53L0X on one bus, the servo and the DRV8833 |
-| `src/dashboard_html.h` | the page, as one PROGMEM string |
-| `src/telemetry_ring.h` | the 1024-record spinlocked run log |
-| `src/wifi_config.h` | the SSID, the password, the fallback access point and the hostname |
-
-The core map:
-
-| what runs | core | where it is set |
-|---|---|---|
-| control task | 1 | `xTaskCreatePinnedToCore`, priority 5, 8 KB in `src/main.cpp`, 33 ms from `control/config.h` |
-| web task | 0 | `xTaskCreatePinnedToCore`, priority 2, 8 KB in `src/main.cpp`, 100 ms from `control/config.h` |
-| AsyncTCP task | 0 | `CONFIG_ASYNC_TCP_RUNNING_CORE=0` in `platformio.ini` |
-| WiFi and lwIP tasks | 0 | the platform's sdkconfig: `CONFIG_ESP_WIFI_TASK_PINNED_TO_CORE_0` and `CONFIG_LWIP_TCPIP_TASK_AFFINITY=0x0` |
-
-The endpoints:
-
-| route | method | what it does |
-|---|---|---|
-| `/` | GET | the page |
-| `/ws` | WebSocket | telemetry, one JSON object per message |
-| `/start` | GET | sets the start request |
-| `/log.csv` | GET | the held run as fixed-width CSV, `text/csv` attachment |
-
-The page is reachable on the configured network, or over the `autoparking` access point at `192.168.4.1`. The SSID, the password and the fallback are in `src/wifi_config.h`.
-
-Telemetry crosses from the control task to the web task through a one-deep queue written with `xQueueOverwrite`, so a slow socket can never hold up the control loop: the web task either gets the newest tick or nothing at all. The JSON carries the numeric fields as integers, t in ms, distances in mm, angles in milliradians and the servo in whole degrees. Phase and stroke are strings. The web task drains the queue every 100 ms and sends, which is 10 Hz. The start request crosses the other way as a `std::atomic<bool>`, set by `/start` and cleared by the control task, which still refuses it before the calibration and ignores it mid-run.
-
-The control task also prints one line at 10 Hz while it runs, every third tick: the phase and the stroke, then x, psi, rear, gL and gR, the servo command, cal, ok and the stroke count. So a bench check does not need a phone joined to the access point.
-
-This runs on the car. The board boots the parking image, reports over USB and serves the page, and the page streams a live `psi`, which is computed from the two side sensors, so both of them return ranges. The bench image drives the motor legs at duty 200 on the 5 V rail. The steering is not calibrated: the servo centre, its direction and the 2.9 to 1 linkage ratio are assumptions from the CAD, so the wheels do not reach the commanded angle and no maneuver has been run to completion. The rear channel has not been read out on its own, and the page has not been opened on a phone.
+`env:servo_sweep` steps the servo through 45 to 135 degrees in 5 degree steps,
+one second apart, and prints each angle with the pulse it sends. The pulse map is
+the library default, 544 to 2400 us over 0 to 180 degrees, so a pulse printed
+here means the same thing on the car. Use it to find the centre and the steering
+direction.
 
 ## How the maneuver runs
 
-The supervisor owns the maneuver and the inner loop owns the steering. They never fight over the servo: during a correction stroke the supervisor has it, and otherwise the inner loop does.
+The loop runs every 25 ms and prints one telemetry line every 100 ms.
 
-```mermaid
-%%{init: {'flowchart': {'curve': 'linear'}}}%%
-flowchart TD
-    start([Power on]) --> cal["Park the car centred and squared up<br/>take 32 readings for S0 and the trim"]
-    cal --> backin["BACK_IN<br/>reverse into the bay<br/>inner loop holds the heading, servo follows"]
-    backin -->|"rear limit reached"| done["DONE<br/>motor off, brake on, steering centred<br/>the log says whether it landed in tolerance"]
-    backin -->|"out of tolerance for 3 ticks"| correct{"CORRECT<br/>heading out of tolerance?"}
-    backin -->|"rear reading unusable"| giveup["GIVEUP<br/>brake and flag it"]
-    correct -->|yes| rotate["Rotate stroke<br/>hold one lock until the heading moves"]
-    correct -->|no| translate["Translate stroke<br/>S-curve: one lock, then the opposite"]
-    rotate -->|"stroke ends"| settle
-    translate -->|"stroke ends"| settle
-    settle["Settle<br/>brake, centre the wheels, wait for stillness"] --> correct
-    correct -->|"in tolerance for 3 ticks"| backin
-    correct -->|"stroke budget spent"| giveup
-```
+| state | what it does |
+|---|---|
+| `IDLE` | wheels centred, motor off, waits 2 s |
+| `REVERSE` | PID steers on the lateral error, motor reverses at duty 90, or duty 40 below 160 mm of rear reading |
+| `PULL_FORWARD` | motor forward at duty 140 for 1.4 s or until the rear reading passes 220 mm, with counter-steer opposite the error sign |
+| `PARKED` | motor off, wheels centred, maneuver over |
+| `EMERGENCY_STOP` | motor off, wheels centred, latched |
 
-The heading is corrected before the offset, because a standing heading error makes the offset grow. A translate stroke is an S-curve rather than one held angle: the servo takes one lock for the first half and the opposite lock for the second, so the heading excursion cancels itself and the car ends up moved sideways with its heading where it started. The stroke stops on the measured excursion rather than on a timer, which is what makes it independent of the speed and of the battery.
+The reverse stops when the rear reading reaches 70 mm. The rear sensor face is
+the rearmost point of the car, so that reading is the tail clearance; the car
+rolls on about 20 mm after the drive is cut, which leaves the tail about 50 mm
+off the wall.
 
-A stroke that loses the side readings stops, because the car may be against a wall and holding the lock makes that worse. The rear sensor gets the same treatment: an unusable reading stops the car unless the wall is simply out of the sensor's range, which the distance reversed since the last usable reading tells apart.
+While the rear reading is inside 160 mm, a lateral error larger than 10 mm asks
+for a pull forward. The car backs out, moves forward with the wheels turned
+against the error, and returns to `REVERSE`. The pull-forward count is capped at
+3, so a wall that cannot be reached does not keep the car hunting.
 
-## How the sensing and steering fit together
+Any valid reading under 40 mm stops the car and latches `EMERGENCY_STOP`. Power
+cycle the board to clear it.
 
-The state is referred to the rear axle centre, which is where the instant centre of rotation lives on any car with a fixed rear axle. That is what lets one equivalent steer angle describe the whole vehicle.
+## Sensor geometry
 
-```mermaid
-%%{init: {'flowchart': {'curve': 'stepBefore'}}}%%
-flowchart LR
-    ref["reference<br/>centred and square"]
-    sum(("+<br/>-"))
-    ctl["Controller<br/>control.h, delta_eq out"]
-    steer["Steering<br/>ackermann.h, the two front wheel angles<br/>and the servo"]
-    plant["Plant<br/>car body, bicycle model"]
-    sense["Sensing<br/>3x VL53L0X, then geometry.h<br/>gaps to a pose"]
-    pose["x lateral offset<br/>psi heading"]
-    sup["Supervisor<br/>phase and correction strokes"]
-    sw1["steer_model<br/>parallel or Ackermann"]
-    sw2["motor_driver<br/>DRV8833 or LM298"]
+The two side faces are perpendicular to the car, not angled. Their readings are
+the left and right gaps themselves, so there is no `sin(45)` factor anywhere.
+`gL` and `gR` are the gaps in metres.
 
-    ref --> sum
-    sum --> ctl
-    ctl --> steer
-    steer --> plant
-    plant --> sense
-    sense --> pose
-    pose -->|"feedback"| sum
+The lateral error is `gL - gR`. A positive error means the left gap is larger,
+so the car sits to the right of the bay centre and the rear has to be steered
+toward the left wall. The PID keeps main's sign behaviour.
 
-    pose -.-> sup
-    sup -.->|"stroke commands"| steer
-    sw1 -.-> steer
-    sw2 -.-> plant
-```
+The two side faces sit ahead of the rear axle: 67 mm on the left and 147 mm on
+the right. A centring-only loop does not need those numbers, so they are
+recorded as constants in `namespace geometry` and nothing derives a heading
+from them. A heading estimate would need them.
 
-The solid arrows are the loop. The reference and the measured pose meet at the summing point, so the controller works on the difference. That one equivalent steer angle goes through the Ackermann split and the car, and the sensing chain measures where the car ended up. The dotted arrows carry everything outside the loop. The supervisor takes the servo during a correction stroke, and the two switches say which hardware and which steering geometry the blocks stand for.
+The rear face is the rearmost point of the car, so the rear reading is the tail
+clearance itself. Ranging runs continuously and the loop reads the latest
+result. A reading of 8190 mm or 65535 mm means no target or a timeout, and is
+rejected.
 
-The controller works in one angle, `delta_eq`. The bicycle model in the simulator is exact for it rather than an approximation, because the rear wheels are fixed and the whole vehicle state is already referenced to the rear axle centre.
+## The steering
 
-Two things are switches rather than facts, because neither has been measured yet. The steering model decides how much lock the car may be given: with Ackermann steering the inner wheel reaches its stop before the equivalent angle does, and the equivalent angle is held below that. The motor driver decides the speed and the stopping distance: the DRV8833 and the LM298 have the same truth table, so the firmware does not care which one is fitted, but the LM298 drops several volts across itself and would run the car at about 63.6 percent of the DRV8833's speed on the same rail.
+The servo is attached with the library defaults (`servo.attach(PIN_SERVO)`),
+driven at whole degrees after clamping to the range in `namespace servo`:
+
+| constant | value | meaning |
+|---|---|---|
+| `CENTRE_DEG` | 90 | command that should point the wheels straight |
+| `DIR` | 1 | sign between a positive lateral error and the servo command |
+| `MIN_DEG` | 45 | lower clamp |
+| `MAX_DEG` | 135 | upper clamp |
+
+The lateral PID works in metres and its output is a servo angle offset in
+degrees. The gains are 180, 4.0 and 40, which are `main`'s 1.8, 0.04 and 0.40
+per centimetre rescaled to metres. They are inherited and unverified on this
+car. The deadband is 8 mm, the integral clamp is 25 and the derivative low pass
+is 0.6.
+
+Two constants have to be calibrated on the car:
+
+1. `servo::CENTRE_DEG`. Run the bench sweep and find the angle where the wheels
+   point straight. Put that number here.
+2. `servo::DIR`. Command a small turn and watch which way the wheels go. If a
+   positive lateral error steers the wrong way, set `DIR` to `-1`.
+
+Change one at a time. A wrong centre looks like an offset the PID cannot remove,
+and a wrong sign looks like the car steering away from the wall on every
+correction.
 
 ## The layout
 
 | path | what is in it |
 |---|---|
-| `control/` | the control core: geometry, the steering loop, the supervisor and the stroke model. no hardware calls, only the `Hal` interface |
-| `control/config.h` | every tunable, in one place: the chassis geometry, drive and steering, the pins, and the sensor and task timing. the one file to edit after measuring |
-| `control/ackermann.h` | the Ackermann relations, splitting the equivalent angle into the two front wheel angles |
-| `tools/sim_main.cpp` | the host plant, the sensor forward model, the scenarios and the fault injection |
-| `tools/step_rig.cpp` | the lateral step-response rig: a 40 mm reference step through the real control law |
-| `tools/step_plot.py` | computes the step metrics, writes the step figures |
-| `tools/sweep.py` | the parameter sweep, writes a CSV and prints a summary |
-| `tools/geom_checks.cpp` | direct checks of the sensor geometry, including the clearance interlock |
-| `docs/` | the step-response note, both time series and the PNG and SVG figures |
-| `src/main.cpp` | the firmware runtime: the control task on core 1, the web task on core 0, and the handoff between them |
-| `src/esp32_hal.h` | the ESP32 `Hal`: three VL53L0X on one bus, the servo and the DRV8833 |
-| `src/dashboard_html.h` | the dashboard, as one PROGMEM string |
-| `src/telemetry_ring.h` | the 1024-record spinlocked run log behind `/log.csv` |
-| `src/wifi_config.h` | the SSID, the password and the fallback access point, in one place |
-| `src/control_build.cpp` | builds the control core with no hardware attached, as a compile check |
-| `lib/Network/` | the committed `Network` source, with the manifest that makes PlatformIO build it |
-
-The control core has no hardware calls in it, so the same code runs against the host simulator and against the ESP32 through `src/esp32_hal.h`. Both are built: the simulator on the host, the firmware for the target.
+| `include/ParkingConfig.h` | pins, addresses, geometry, servo constants, PID gains and maneuver thresholds, in one place |
+| `include/DistanceSensorManager.h` | the three VL53L0X, their bring-up order and continuous ranging |
+| `include/MotorController.h` | the DRV8833 on four pins, forward, reverse and stop |
+| `include/PIDController.h` | the lateral PID and the servo angle mapping |
+| `src/main.cpp` | the one loop and the state machine |
+| `bench/` | the separate bench project: motor test, I2C scan, servo sweep |
+| `releases/` | the factory images published by a tag |
+| `lib/Network/` | the vendored `Network` source, kept because the platform expects it |
 
 ## Status
 
-The firmware builds and links for the ESP32-S3 Super Mini at 24.7 percent of RAM (80,924 of 327,680 bytes), and the released factory image `hw-2026-11-02.4` is 1,133,168 bytes, on a 4 MB board with the `max_app_4MB.csv` table and the 2 MB in-package PSRAM enabled as quad SPI. It has been flashed and it runs: the board boots, reports over USB, serves the page and drives the motors. The control core, the HAL adapter and the dashboard are written for the target, and the host simulator builds with them. The steering mapping is still uncalibrated, so the maneuver is unproven and the step response above is simulated.
+Build-verified only. Nothing on this branch has been flashed or run on the car.
+
+The firmware builds and links for the ESP32-S3 Super Mini at 24,740 bytes of RAM
+(7.6 percent of 327,680) and 363,095 bytes of flash. The application partition
+is the 4,063,232-byte `app0` from `max_app_4MB.csv`, so the app uses about 8.9
+percent of it. PlatformIO prints 4.3 percent because it divides by the board's
+8 MB `maximum_size`, which is not the figure to quote. The merged
+`releases/autoparking.factory.bin` is 435,200 bytes.
+
+The three bench environments build. The servo, sensor and drive behaviour is
+not observed on hardware in this branch. The servo centre and direction are
+still the assumed 90 degrees and `DIR = 1`, and the PID gains are main's,
+rescaled but never tuned on this car. No maneuver has run to completion.

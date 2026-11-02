@@ -6,17 +6,17 @@
 
 #include <Arduino.h>
 
-#include "config.h"
+#include "ParkingConfig.h"
 
 // High enough that a healthy car always moves on the 5 V rail. If the car pulls
 // away backwards, the inversion flag for that side is wrong, which is what V0
 // C4 settles.
 constexpr uint8_t DRIVE_DUTY = 200;
 
-// One DRV8833 channel, driven exactly as Esp32Hal::driveChannel drives it. The
-// copy is deliberate: this build must not pull the sensor stack in, and the pin
-// and inversion constants still come from control/config.h, so a rewiring
-// propagates here on the next build. Only the lines below can drift.
+// One DRV8833 channel, driven exactly as MotorController::driveChannel drives
+// it. The copy is deliberate: this build must not pull the sensor stack in, and
+// the pin and inversion constants still come from ParkingConfig.h, so a
+// rewiring propagates here on the next build. Only the lines below can drift.
 static void driveChannel(int inA, int inB, int dir, uint8_t duty, bool invert) {
   // Every write is analogWrite, including the zero side, because the first PWM
   // on a pin hands it to the LEDC peripheral and digitalWrite then refuses it.

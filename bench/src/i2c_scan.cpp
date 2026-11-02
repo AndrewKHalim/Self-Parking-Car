@@ -14,7 +14,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 
-#include "config.h"
+#include "ParkingConfig.h"
 
 // The sensors all power up at 0x29, so a presence scan shows one entry there
 // whatever is fitted. That is what this test needs. Addressing them apart is
