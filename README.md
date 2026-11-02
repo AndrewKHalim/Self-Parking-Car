@@ -176,7 +176,11 @@ reason, `fault=rear` or `fault=side`, and latches.
 - a fresh side reading under 25 mm, which brakes and faults;
 - two consecutive rear frames that are neither 8190 nor 65535, which brakes
   and faults as `rear`;
-- 3000 ms without one of the above, which brakes and parks.
+- 3000 ms without one of the above, which brakes and faults as `timeout`.
+
+The cap is a give-up, not a wall. A run that ran out of time shows
+`fault=timeout` on the serial line and the page, so it cannot be mistaken for a
+run that reached the rear limit.
 
 A fresh rear reading of 0 to 29 mm is the part's minimum range, so it means the
 face is at the wall. It counts as a stop, not as a distance of 29 mm.

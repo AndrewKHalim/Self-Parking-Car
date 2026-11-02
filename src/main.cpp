@@ -42,7 +42,8 @@ enum State : uint8_t {
 enum Fault : uint8_t {
   FAULT_NONE = 0,
   FAULT_REAR,
-  FAULT_SIDE
+  FAULT_SIDE,
+  FAULT_TIMEOUT
 };
 
 State state_ = STATE_IDLE;
@@ -88,6 +89,8 @@ const char* faultName(Fault f) {
     return "rear";
   case FAULT_SIDE:
     return "side";
+  case FAULT_TIMEOUT:
+    return "timeout";
   default:
     return "none";
   }
@@ -330,10 +333,14 @@ void loop() {
     } else {
       rearInvalid_ = 0;
     }
+    // The cap is a give-up, not a wall. It names timeout so a run that ran out
+    // of time cannot be mistaken for one that reached the rear limit ---
     if (now - stateStart_ >= parking::REVERSE_MAX_MS) {
+      fault_ = FAULT_TIMEOUT;
       enter(STATE_BRAKE);
       break;
     }
+    // end
 
     steering.write(servo::CENTRE_DEG);
     motors.reverse(drive::DUTY_REVERSE);
