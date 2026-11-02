@@ -44,7 +44,8 @@ inline Pose pose(const Config& c, float gL, float gR) {
   return p;
 }
 
-// Body-to-wall clearance on the tighter side. An unusable reading comes back negative, which tells the caller to hold the car back.
+// Body-to-wall clearance on the tighter side. An unusable reading comes back
+// negative, and the dashboard reports it as unknown.
 inline float clearance(const Config&, float gL, float gR) {
   if (!validRange(gL) || !validRange(gR)) return -1.0f;
   float left = gL - car::e_out_L;
@@ -52,16 +53,6 @@ inline float clearance(const Config&, float gL, float gR) {
   if (left < right) return left;
   return right;
 }
-
-// Peak yaw before a corner touches a wall, from the (L_car/2)*sin(psi) sweep. An unknown clearance fails closed to the small end.
-inline float peakYawCap(const Config& c, float clear) {
-  if (clear <= 0.0f) return c.psi_cap_min;
-  float s = clear / (0.5f * car::L_car);
-  if (s > 1.0f) s = 1.0f;
-  float cap = asinf(s);
-  if (cap < c.psi_cap_min) cap = c.psi_cap_min;
-  if (cap > c.psi_cap_max) cap = c.psi_cap_max;
-  return cap;
-}
+// end
 
 }

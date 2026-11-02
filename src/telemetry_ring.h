@@ -28,7 +28,7 @@ struct Sample {
   uint16_t strokes = 0;
   uint8_t phase = 0;
   uint8_t stroke = 0;
-  uint8_t flags = 0;
+  uint16_t flags = 0;
   uint32_t seq = 0;
 };
 
@@ -43,9 +43,12 @@ constexpr uint8_t SAMPLE_OUT_OF_SPEC = 1 << 4;
 constexpr uint8_t SAMPLE_LEFT_VALID = 1 << 5;
 constexpr uint8_t SAMPLE_RIGHT_VALID = 1 << 6;
 constexpr uint8_t SAMPLE_REAR_VALID = 1 << 7;
+// The calibration bit is a state, so it stays 8-bit. The fault that ends a run
+// before it starts needs a ninth bit, which is why the flag word is 16-bit.
+constexpr uint16_t SAMPLE_CAL_FAULT = 1 << 8;
 
 // Every row is the same length, so the response filler can find row n from the request offset alone. A value that outgrew its field would shift every later row, so the widths cover the whole integer range behind them.
-constexpr size_t CSV_ROW_LEN = 96;
+constexpr size_t CSV_ROW_LEN = 98;
 constexpr char CSV_HEADER[] =
     "t_ms,x_mm,psi_mrad,rear_mm,gL_mm,gR_mm,clearance_mm,psi_cap_mrad,"
     "servo_deg,phase,stroke,strokes,flags,seq\n";
@@ -59,12 +62,13 @@ inline int16_t sampleMm(float m) {
   return (int16_t)v;
 }
 
-inline uint8_t sampleFlags(const Telemetry& t, float gL, float gR, float gRear) {
-  uint8_t f = 0;
+inline uint16_t sampleFlags(const Telemetry& t, float gL, float gR, float gRear) {
+  uint16_t f = 0;
   if (t.valid) f |= SAMPLE_VALID;
   if (t.calibrated) f |= SAMPLE_CALIBRATED;
   if (t.rearFault) f |= SAMPLE_REAR_FAULT;
   if (t.travelFault) f |= SAMPLE_TRAVEL_FAULT;
+  if (t.calFault) f |= SAMPLE_CAL_FAULT;
   if (t.outOfSpec) f |= SAMPLE_OUT_OF_SPEC;
   if (geom::validRange(gL)) f |= SAMPLE_LEFT_VALID;
   if (geom::validRange(gR)) f |= SAMPLE_RIGHT_VALID;
@@ -140,7 +144,7 @@ class TelemetryRing {
   static void csvRow(uint32_t seq, const Sample& s, char* dst, size_t cap) {
     snprintf(dst, cap,
              "%010lu,%+06d,%+06d,%+06d,%+06d,%+06d,%+06d,%+06d,%+06d,"
-             "%03u,%03u,%05u,%03u,%010lu\n",
+             "%03u,%03u,%05u,%05u,%010lu\n",
              (unsigned long)s.t_ms, (int)s.x_mm, (int)s.psi_mrad,
              (int)s.rear_mm, (int)s.gL_mm, (int)s.gR_mm,
              (int)s.clearance_mm, (int)s.psi_cap_mrad, (int)s.servo_deg,

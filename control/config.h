@@ -6,31 +6,8 @@
 // measured value carries the date it was taken and the gate that produced it,
 // and every value still guessed names the gate that replaces it. PLAN.md
 // section 13 lists what is left to measure.
-// The order runs the chassis geometry, the control configuration, the board
-// pins and the task timing.
-
-// How the front wheels are steered. An Ackermann inner wheel reaches its stop first, where PARALLEL holds both at one angle.
-enum class SteerModel {
-  PARALLEL,
-  ACKERMANN,
-};
-
-// The motor driver. Same truth table either way, only the dropout differs.
-enum class MotorDriver {
-  DRV8833,
-  LM298,
-};
-
-// Volts dropped at about an amp, and the deceleration it brakes at in m/s^2.
-struct DriveModel {
-  float drop;
-  float brakeDecel;
-};
-
-inline DriveModel driveModel(MotorDriver d) {
-  if (d == MotorDriver::LM298) return DriveModel{2.5f, 0.6f};
-  return DriveModel{0.5f, 1.0f};
-}
+// The order runs the chassis geometry, the maneuver, the board pins and the
+// task timing.
 
 // Chassis dimensions in metres, 2026-10-29. L_car and L_wb are given for this
 // project, and V0 A1 and A2 replace them. t_front is the kingpin bore spacing in
@@ -59,114 +36,114 @@ constexpr float d_R     = -0.147f;
 constexpr float e_out_L = 0.000f;
 constexpr float e_out_R = 0.000f;
 }
+// end
 
 // The steering linkage. The servo stands upright with the module 0.8, 12 tooth
 // pinion on its spline, and that pinion drives the rack, so one servo degree is
 // 0.0838 mm of rack. The steering arm is 14.00 mm from the kingpin to the tie
-// rod, so one servo degree is 0.343 degrees at the road wheel. The control law
-// works in wheel angle, so it scales by this before it writes. Both figures are
-// from the CAD, which has no servo mount and no tie rod, so the ratio covers
-// the pinion and the arm only. The centre and the sign are still the assumed
-// 1500 us and left. V0 B1 and B2 replace all three.
+// rod, so one servo degree is 0.343 degrees at the road wheel. Only the
+// converter below still uses the ratio, because the firmware commands servo
+// degrees directly now. Both figures are from the CAD, which has no servo mount
+// and no tie rod, so the ratio covers the pinion and the arm only. The centre
+// and the sign are still the assumed 1500 us and left. V0 B1 and B2 replace all
+// three.
+// MIN_DEG and MAX_DEG are the range main drove and clamped to. The linkage is
+// only assumed, so every write is held inside it rather than at the servo's own
+// 0 to 180.
 namespace servo {
 constexpr float CENTRE_DEG = 90.0f;
+constexpr float MIN_DEG    = 45.0f;
+constexpr float MAX_DEG    = 135.0f;
 constexpr float DIR        = 1.0f;
 constexpr float PER_WHEEL  = 2.9f;
 }
+// end
 
-// Servo command in degrees for a wheel angle in radians, which is what the
-// supervisor holds. One place, because the drive and the strokes both write it.
+// Servo command in degrees for a wheel angle in radians, clamped to the range
+// main proved. Nothing in the firmware commands a wheel angle any more, so this
+// stays as the one conversion for anything that does.
 inline float servoDegFromWheel(float wheelRad) {
-  return servo::CENTRE_DEG + servo::DIR * servo::PER_WHEEL * wheelRad * 57.29578f;
+  const float deg =
+      servo::CENTRE_DEG + servo::DIR * servo::PER_WHEEL * wheelRad * 57.29578f;
+  if (deg < servo::MIN_DEG) return servo::MIN_DEG;
+  if (deg > servo::MAX_DEG) return servo::MAX_DEG;
+  return deg;
 }
+// end
 
 struct Config {
-  // Sensor offsets in metres. Unmeasured, so zero, and the calibration folds them into S0 and the trim, which is what replaces them.
-  float e_L      = 0.00f;
-  float e_R      = 0.00f;
+  // Sensor offsets in metres. Unmeasured, so zero, and the calibration folds
+  // them into S0 and the trim, which is what replaces them.
+  float e_L = 0.00f;
+  float e_R = 0.00f;
 
-  // The chassis carries the printed rack, pinion and two horns, so the front
-  // wheels are not parallel, and V0 B3 confirms the two angles differ.
-  // motor_driver is the board being fitted. The whole car runs on one 5 V rail,
-  // so motor_supply is 5.0 at the driver's VM pin and the stock 6 V motor sees
-  // about 4.5 V after the dropout. For the DRV8833 that cancels in driveScale
-  // and only the LM298 branch reads it, so it is not a speed knob. V0 A6
-  // measures the rail at the pin.
-  SteerModel steer_model = SteerModel::ACKERMANN;
-  MotorDriver motor_driver = MotorDriver::DRV8833;
-  float motor_supply = 5.0f;
-
-  // Front wheel drag in a turn that is not steered to the Ackermann relation.
-  float scrub_gain = 0.05f;
-
-  // Run-time calibration. S0 is the sensor sum with the car squared up, and the trim is half the centred difference. Averaging keeps noise out of the run.
-  float S0        = 0.0f;
-  float trim      = 0.0f;
+  // Run-time calibration. S0 is the sensor sum with the car squared up, and the
+  // trim is half the centred difference. Averaging keeps noise out of the run,
+  // and the batch is retaken on every start so the pose the run begins from is
+  // the pose it is measured against. 32 ticks is 1.1 s at the control period,
+  // and the cap is the backstop for a car that cannot see both walls.
+  float S0            = 0.0f;
+  float trim          = 0.0f;
   int   calib_samples = 32;
+  uint32_t calib_timeout_ms = 5000;
+
   // Provisional, this tree's figure for the 468 mm car, and V0 C1 replaces it
-  // with a timed 20 cm reverse at the chosen reverse duty.
-  float speed     = 0.15f;
-  // Duty on the two drive legs. 90 of 255 is the reverse crawl and 140 the
-  // forward stroke, and both are replaced by the duty that produces the
-  // measured speed, V0 C1 reverse and V0 C2 forward, since driveScale only
-  // corrects the driver's voltage drop.
-  uint8_t reverse_duty = 90;
-  uint8_t stroke_duty  = 140;
+  // with a timed 20 cm reverse at the chosen reverse duty. The firmware no
+  // longer steers from it, so it only dead-reckons the travel watchdog.
+  float speed = 0.15f;
+
+  // Duty on the drive legs. 55 is main's reverse cruise and 10 its crawl, which
+  // is what it slowed to inside 160 mm of the wall. 90 is main's forward
+  // adjustment. All three are replaced by the duty that produces the measured
+  // speed, V0 C1 reverse and V0 C2 forward.
+  uint8_t reverse_duty  = 55;
+  uint8_t crawl_duty    = 10;
+  uint8_t stroke_duty   = 90;
+  float   crawl_below_m = 0.160f;
+
   // Braking distance, that is the roll-on after cutting drive. V0 C3 measures
   // it and the value is held until V5.
-  float d_stop    = 0.020f;
+  float d_stop = 0.020f;
 
-  // Tolerances, bay target, correction budget and stroke timing. The bay is
-  // 300 wide and 450 deep, so 90 mm a side and 216 mm longer than the car. The
-  // box alone would allow about 50 mm of offset at this alignment tolerance,
-  // which is slack, so the sensor noise sets the tolerances and not the bay.
-  // tol_off and tol_align stay until V5 has ten runs.
+  // Tolerances, bay target and the rear trigger. The bay is 300 wide and 450
+  // deep, so 90 mm a side and 216 mm longer than the car. The tolerances are
+  // reporting only now, and the rear trigger is what ends the reverse.
   // rear_target is a reading, and the rear sensor face is the rearmost point of
   // the car, 35.5 mm behind the rear axle when taped on 2026-11-02, so the
   // reading is the tail clearance itself. 0.038 with the 0.012 margin asks for
-  // 0.050 and leaves the tail 50 mm off the wall, 166 mm inside the mouth. The
-  // host sim stops further out, because its plant brakes in 11 mm where 0.020 is
-  // assumed and the trigger is sampled every 33 ms, so treat 0.038 as the value
-  // until V0 C3 measures the braking distance.
-  float tol_off      = 0.010f;
-  float tol_align    = 0.061f;
-  float rear_target  = 0.038f;
-  float rear_margin  = 0.012f;
-  int   dwell        = 3;
-  // 24 strokes, not 12. The 80 mm baseline leaves the heading estimate noisy
-  // enough that the correction loop needs more than 12 to settle, and the
-  // 300 x 450 group spends a median of 8 and a worst case of 24 at 3 mm of gap
-  // noise. The typical run is unchanged, so this only lengthens the bad ones.
-  int   max_strokes  = 24;
-  float stroke_dir   = 1.0f;
-  float brake_settle = 0.15f;
-  float stroke_timeout = 3.0f;
+  // 0.050 and leaves the tail 50 mm off the wall, 166 mm inside the mouth.
+  float tol_off     = 0.010f;
+  float tol_align   = 0.061f;
+  float rear_target = 0.038f;
+  float rear_margin = 0.012f;
 
-  // Watchdogs. Rear readings in a row, the furthest reverse with no odometer, and unusable side readings during a stroke.
-  int   rear_fault_ticks = 3;
+  // The maneuver, all fixed times. The car reverses straight, then runs one
+  // forward pulse at a fixed lock and one reverse pulse at the opposite lock,
+  // and repeats that until corrections_max corrections are done or the car is
+  // at the wall. Nothing here is computed from a measurement, because a
+  // computed profile needs a measured car and this one is not measured.
+  int   corrections_max = 3;
+  float pull_angle_deg  = 25.0f;
+  // The one polarity to flip if the car corrects the wrong way on the car. The
+  // direction itself comes from the sign of gL - gR, the way main did it, and
+  // the linkage sign has never been measured, V0 B2.
+  float pull_steer_sign = 1.0f;
+  // main ended its forward leg when the rear reading passed 22 cm, and that is
+  // the only measurement that can shorten a pull.
+  float pull_rear_exit_m = 0.220f;
+  uint32_t pull_forward_ms = 300;
+  uint32_t pull_reverse_ms = 300;
+  uint32_t settle_ms       = 150;
+
+  // Watchdogs. Rear readings in a row, the furthest reverse with no odometer,
+  // and a wall clock on the reverse leg so a dead sensor cannot reverse the car
+  // off the far end of the bay.
+  int   rear_fault_ticks   = 3;
   float back_in_max_travel = 2.5f;
-  int   stroke_invalid_ticks = 2;
+  uint32_t back_in_max_ms  = 10000;
 
-  // Steering in radians. Mechanical limit, stroke amplitudes, yaw caps, and the SG90 10us dead band and 0.10s/60deg speed at 4.8v. delta_max is provisional, and V0 B1 and B2 replace it with a protractor at commanded 45 and 135 degrees.
-  float delta_max     = 0.436f;
-  float delta_coarse  = 0.436f;
-  float delta_fine    = 0.209f;
-  float fine_threshold = 0.020f;
-  float psi_cap_min   = 0.087f;
-  float psi_cap_max   = 0.436f;
-  float psi_meas_max  = 0.209f;
-  float servo_deadband = 0.0314f;
-  float servo_rate    = 10.472f;
-
-  // Closed-loop shape in rad/s and damping ratio, the outer integral and its clamp, the three filter constants, and the control period.
-  float omega_n = 1.2f;
-  float zeta    = 0.9f;
-  float ki      = 0.0f;
-  float i_max   = 0.20f;
-  float tau_psi = 0.05f;
-  float tau_filt = 0.25f;
-  float tau_x   = 0.03f;
-  float dt      = 0.033f;
+  // The control period the travel dead reckoning integrates over.
+  float dt = 0.033f;
 };
 
 // Board pin map for the ESP32-S3 Super Mini. GPIO 26 to 32 carry the
@@ -209,6 +186,7 @@ constexpr uint32_t SENSOR_PERIOD_MS = 33;
 // outlasts one measurement, so a healthy sensor never trips it.
 constexpr uint16_t SENSOR_TIMEOUT_MS = 50;
 }
+// end
 
 // Ten signals on one board, so two functions sharing a pin is a harness mistake
 // that would only show up as two peripherals fighting. The build catches it.
@@ -222,11 +200,12 @@ constexpr bool pinsDistinct() {
       if (p[i] == p[j]) return false;
   return true;
 }
+// end
 static_assert(pinsDistinct(), "board pins must be unique");
 
 namespace timing {
-// 30 Hz, which is what Config::dt says. The control law measures its own dt,
-// but the stroke profiles assume a tick.
+// 30 Hz, which is what Config::dt says. The maneuver is timed from the clock,
+// and the travel dead reckoning assumes this period.
 constexpr uint32_t CONTROL_PERIOD_MS = 33;
 
 // Ten a second is enough to watch a maneuver that takes seconds, and keeps the
@@ -237,22 +216,10 @@ constexpr uint32_t TELEMETRY_PERIOD_MS = 100;
 // to its own access point.
 constexpr uint32_t WIFI_TIMEOUT_MS = 15000;
 }
+// end
 
-// The stroke profiles assume one tick per control period, so a silent
+// The travel dead reckoning integrates over one control period, so a silent
 // disagreement with Config::dt is a real bug and not a tuning choice.
 static_assert(Config{}.dt >= 0.001f * (float)timing::CONTROL_PERIOD_MS - 0.0005f &&
               Config{}.dt <= 0.001f * (float)timing::CONTROL_PERIOD_MS + 0.0005f,
               "Config::dt must agree with CONTROL_PERIOD_MS to the millisecond");
-
-// Speed with the fitted driver, as a fraction of the DRV8833 the car was measured with. A DC motor follows the volts across it, and the driver takes its drop.
-inline float driveScale(const Config& c) {
-  const float fitted = c.motor_supply - driveModel(c.motor_driver).drop;
-  const float ref = c.motor_supply - driveModel(MotorDriver::DRV8833).drop;
-  if (fitted <= 0.0f || ref <= 0.0f) return 0.0f;
-  return fitted / ref;
-}
-
-// Speed with the fitted driver taken into account.
-inline float driveSpeed(const Config& c) {
-  return c.speed * driveScale(c);
-}

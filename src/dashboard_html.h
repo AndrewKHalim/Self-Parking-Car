@@ -123,7 +123,7 @@ function show(d) {
   byId('v-phase').textContent = d.phase;
   byId('v-strokes').textContent = d.strokes;
   byId('v-cal').textContent = d.cal ? 'yes' : 'no';
-  button.disabled = !d.cal || d.phase === 'back_in' || d.phase === 'correct';
+  button.disabled = !d.cal || d.phase === 'calibrate' || d.phase === 'back_in' || d.phase === 'pull';
 
   if (d.t <= seededT) return;
   pts.push({ t: d.t, x: d.x, psi: d.psi * MRAD_TO_DEG, servo: d.servo, pose: !!d.valid });

@@ -46,40 +46,33 @@ static TelemetryRing runLog;
 static const char* phaseName(Phase p) {
   switch (p) {
     case Phase::IDLE: return "idle";
+    case Phase::CALIBRATE: return "calibrate";
     case Phase::BACK_IN: return "back_in";
-    case Phase::CORRECT: return "correct";
+    case Phase::PULL: return "pull";
     case Phase::DONE: return "done";
     case Phase::GIVEUP: return "giveup";
   }
   return "unknown";
 }
 
-static const char* strokeName(Stroke s) {
-  switch (s) {
-    case Stroke::NONE: return "none";
-    case Stroke::ROTATE: return "rotate";
-    case Stroke::TRANSLATE: return "translate";
-  }
-  return "unknown";
-}
-
-// One JSON object per message, numeric fields as integers. t is ms, x, rear, travel, clearance, gL and gR are mm, psi, cap, peak are milliradians, servo degrees. seq is the ring record this sample came from, so the page can line it up with the CSV.
+// One JSON object per message, numeric fields as integers. t is ms, x, rear, travel, clearance, gL and gR are mm, psi, cap, peak are milliradians, servo degrees. seq is the ring record this sample came from, so the page can line it up with the CSV. strokes is the correction count.
 static void publishTelemetry(const Telemetry& t, uint32_t seq) {
   if (socket.count() == 0) return;
 
   static char line[384];
   snprintf(line, sizeof(line),
            "{\"t\":%lu,\"x\":%ld,\"psi\":%ld,\"rear\":%ld,\"servo\":%d,"
-           "\"phase\":\"%s\",\"stroke\":\"%s\",\"strokes\":%d,"
+           "\"phase\":\"%s\",\"stroke\":\"none\",\"strokes\":%d,"
            "\"cal\":%d,\"valid\":%d,\"travel\":%ld,\"cap\":%ld,"
            "\"clear\":%ld,\"peak\":%ld,\"gL\":%ld,\"gR\":%ld,\"seq\":%lu,"
-           "\"rearFault\":%d,\"travelFault\":%d,\"outOfSpec\":%d}",
+           "\"rearFault\":%d,\"travelFault\":%d,\"calFault\":%d,"
+           "\"outOfSpec\":%d}",
            (unsigned long)(t.t * 1000.0f),
            (long)lroundf(t.x * 1000.0f),
            (long)lroundf(t.psi * 1000.0f),
            (long)lroundf(t.rear * 1000.0f),
            (int)lroundf(t.servo),
-           phaseName(t.phase), strokeName(t.stroke), t.strokes,
+           phaseName(t.phase), t.strokes,
            (int)t.calibrated, (int)t.valid,
            (long)lroundf(t.travel * 1000.0f),
            (long)lroundf(t.psiCap * 1000.0f),
@@ -88,7 +81,8 @@ static void publishTelemetry(const Telemetry& t, uint32_t seq) {
            (long)lroundf(t.gL * 1000.0f),
            (long)lroundf(t.gR * 1000.0f),
            (unsigned long)seq,
-           (int)t.rearFault, (int)t.travelFault, (int)t.outOfSpec);
+           (int)t.rearFault, (int)t.travelFault, (int)t.calFault,
+           (int)t.outOfSpec);
   socket.textAll(line);
 }
 
@@ -134,19 +128,19 @@ static void controlTask(void* arg) {
 
   Supervisor sup;
   sup.attach(h);
-  sup.calibrate();
 
   // vTaskDelayUntil keeps the period honest, where a plain delay would add the tick's own cost to every period.
   TickType_t last = xTaskGetTickCount();
 
   for (;;) {
     if (startRequest.exchange(false)) {
-      const bool running = sup.phase == Phase::BACK_IN || sup.phase == Phase::CORRECT;
+      const bool running = sup.phase == Phase::CALIBRATE ||
+                           sup.phase == Phase::BACK_IN ||
+                           sup.phase == Phase::PULL;
       if (running) {
         Serial.println("start ignored: run in progress");
-      } else if (!sup.start()) {
-        Serial.println("start ignored: not calibrated");
       } else {
+        sup.start();
         Serial.println("start");
       }
     }
@@ -158,7 +152,7 @@ static void controlTask(void* arg) {
     static uint32_t tick = 0;
     if (++tick % 3 == 0) {
       Serial.printf("%7.2fs %-9s %-9s x=%+6.1f psi=%+6.1f rear=%6.1f gL=%6.1f gR=%6.1f servo=%5.1f cal=%d ok=%d strokes=%d\n",
-                    sup.tel.t, phaseName(sup.tel.phase), strokeName(sup.tel.stroke),
+                    sup.tel.t, phaseName(sup.tel.phase), "NONE",
                     sup.tel.x * 1000.0f, sup.tel.psi * 57.2958f,
                     sup.tel.rear * 1000.0f, sup.tel.gL * 1000.0f,
                     sup.tel.gR * 1000.0f, sup.tel.servo,

@@ -74,9 +74,11 @@ struct Esp32Hal : Hal {
   }
 
   void setServo(float deg) override {
-    // A whole degree is the smallest step the servo is driven at, so the profile is rounded here and the telemetry carries the same number.
-    if (deg < 0.0f) deg = 0.0f;
-    if (deg > 180.0f) deg = 180.0f;
+    // A whole degree is the smallest step the servo is driven at, so the command
+    // is rounded here and the telemetry carries the same number. The clamp is
+    // main's proven range, held inside the HAL so every writer is covered.
+    if (deg < servo::MIN_DEG) deg = servo::MIN_DEG;
+    if (deg > servo::MAX_DEG) deg = servo::MAX_DEG;
     servo.write((int)lroundf(deg));
   }
 
