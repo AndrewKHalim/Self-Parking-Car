@@ -1,0 +1,15 @@
+# Regenerable. Do not commit.
+.pio/
+.venv/
+build/
+src/idf_component.yml
+
+# Host tooling leftovers
+*.o
+*.d
+__pycache__/
+compile_commands.json
+
+# Working notes stay in the tree, out of the published branch.
+AGENTS.md
+HANDOFF.md
