@@ -234,13 +234,20 @@ inversion flags from `src/config.h`.
 
 ```bash
 cd bench
-../.venv/bin/pio run -e motor_test -e i2c_scan -e servo_sweep
+../.venv/bin/pio run -e motor_test -e motor_reverse -e i2c_scan -e servo_sweep
 ```
 
 `env:motor_test` drives both motors forward at duty 200 from `setup()` and keeps
 driving until the power is cut. It is what to flash when the only question is
 whether the drive works. If the car drives away backwards, the inversion flag for
 that side is wrong.
+
+`env:motor_reverse` is the same test with the direction flipped, and it uses the
+firmware's own `Drive` class, so the PWM frequency, duty and inversion are the
+ones the parking firmware sends. It drives both motors in reverse from `setup()`
+and keeps driving until the power is cut. The car moves backwards the moment it
+is powered: put the wheels off the ground or leave the car clear behind it. If
+it drives forward instead, the inversion flags or the channel mapping are wrong.
 
 `env:i2c_scan` drives the three XSHUT lines high, prints the idle voltage of
 GPIO 8 and 9 on the ADC, then scans with SDA on GPIO 8 and SCL on GPIO 9, closes
@@ -349,7 +356,7 @@ millimetres, `psi` and `psiRef` in milliradians and the servo in degrees.
 | `src/main.cpp` | the one loop, the states and the web routes |
 | `src/dashboard_html.h` | the page, as one PROGMEM string |
 | `src/wifi_config.h` | the SSID, the password and the fallback access point |
-| `bench/` | the separate bench project: motor test, I2C scan, servo sweep |
+| `bench/` | the separate bench project: forward and reverse motor tests, I2C scan, servo sweep |
 | `releases/` | the factory image published by a tag |
 | `lib/Network/` | the vendored `Network` source, kept because the platform expects it |
 
@@ -358,14 +365,14 @@ millimetres, `psi` and `psiRef` in milliradians and the servo in degrees.
 Build-verified only. Nothing on this branch has been flashed or run on the car.
 
 The firmware builds and links for the ESP32-S3 Super Mini at 48,220 bytes of RAM
-(14.7 percent of 327,680) and 997,306 bytes of flash. The application partition
+(14.7 percent of 327,680) and 997,562 bytes of flash. The application partition
 is the 4,063,232-byte `app0` from `max_app_4MB.csv`, so the app uses 24.5
 percent of it. PlatformIO prints 11.9 percent because it divides by the board's
 8 MB `maximum_size`, which is not the figure to quote. The
-`releases/autoparking.factory.bin` built from this tree is 1,078,976 bytes, sha256
-`1639f6144bbd795bbb8b65d789a92c2ce260e710f54fb681a6e022081fe8cc45`.
+`releases/autoparking.factory.bin` built from this tree is 1,079,232 bytes, sha256
+`6721407198d49d2c24b4da144ce19fe9bd8155171eb7d0dd7d35e662c231878c`.
 
-The three bench environments build. The servo, sensor and drive behaviour is not
+The four bench environments build. The servo, sensor and drive behaviour is not
 observed on hardware in this branch. Duty 200 is the only duty ever seen to move
 this car, and only forward on the bench. The rear sensor has never been read out
 on its own. No run has completed.

@@ -4,7 +4,7 @@ name: release
 # only has to publish it and does not build anything.
 on:
   push:
-    tags: ["hw-*"]
+    tags: ["hw-*", "bench-*"]
 
 permissions:
   contents: write
@@ -16,12 +16,18 @@ jobs:
       - uses: actions/checkout@v4
 
       # The asset list is explicit on purpose. The tree also carries the bench
-      # images, and a release must ship exactly one file, the application
-      # factory image, so nothing here globs releases/.
+      # images, and the release must not grow whichever files happen to sit in
+      # releases/, so nothing here globs. The parking image ships with every
+      # tag. A bench image is attached only when the owner asks for one, and
+      # that request is the bench- prefix on the tag.
       - name: Publish the factory image
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" releases/autoparking.factory.bin \
+          assets=(releases/autoparking.factory.bin)
+          if [[ "$GITHUB_REF_NAME" == bench-* ]]; then
+            assets+=(releases/motor_reverse.factory.bin)
+          fi
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
             --title "Build $GITHUB_REF_NAME" \
-            --notes "Ready-to-flash image for the ESP32-S3 Super Mini, written at 0x0 with esptool. autoparking.factory.bin is the parking firmware: it calibrates the bay width at the start of the run, then reverses at duty 200 under a cascade PID on lateral offset and heading, with a rear stop at 90 mm, a side guard under 25 mm, a 300 ms brake, and a dashboard showing x, psi and the servo command. Built from commit $GITHUB_SHA."
+            --notes "Ready-to-flash image for the ESP32-S3 Super Mini, written at 0x0 with esptool. autoparking.factory.bin is the parking firmware: it calibrates the bay width at the start of the run, then reverses at duty 200 under a cascade PID on lateral offset and heading, with a rear stop at 90 mm, a side guard under 25 mm, a 300 ms brake, and a dashboard showing x, psi and the servo command. A bench- tag also attaches motor_reverse.factory.bin, which drives both motors in reverse from power-on until the power is cut. Built from commit $GITHUB_SHA."
