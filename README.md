@@ -250,7 +250,7 @@ Telemetry crosses from the control task to the web task through a one-deep queue
 
 The control task also prints one line at 10 Hz while it runs, every third tick: the phase and the stroke, then x, psi, rear, gL and gR, the servo command, cal, ok and the stroke count. So a bench check does not need a phone joined to the access point.
 
-This is compile-verified, not hardware-verified. The firmware builds and links for the target, but no board has run it, so no sensor has been read, the servo has never moved, the network join is untested and the page has not been opened on a phone.
+This runs on the car. The board boots the parking image, reports over USB and serves the page, and the page streams a live `psi`, which is computed from the two side sensors, so both of them return ranges. The bench image drives the motor legs at duty 200 on the 5 V rail. The steering is not calibrated: the servo centre, its direction and the 2.9 to 1 linkage ratio are assumptions from the CAD, so the wheels do not reach the commanded angle and no maneuver has been run to completion. The rear channel has not been read out on its own, and the page has not been opened on a phone.
 
 ## How the maneuver runs
 
@@ -340,4 +340,4 @@ The control core has no hardware calls in it, so the same code runs against the 
 
 ## Status
 
-The firmware builds and links for the ESP32-S3 Super Mini at RAM 24.7 percent (80,924 of 327,680 bytes) and Flash 26.0 percent of the 4,063,232 byte `app0` partition (1,055,154 bytes), on a 4 MB board with the `max_app_4MB.csv` table and the 2 MB in-package PSRAM enabled as quad SPI. The control core, the HAL adapter and the dashboard are written and compile for the target, and the host simulator builds with them. The board has never been flashed: no sensor reading, servo position or WiFi join has been verified on real hardware. The maneuver itself remains unproven until the car runs, and the step response above is simulated.
+The firmware builds and links for the ESP32-S3 Super Mini at 24.7 percent of RAM (80,924 of 327,680 bytes), and the released factory image `hw-2026-11-02.3` is 1,137,584 bytes, on a 4 MB board with the `max_app_4MB.csv` table and the 2 MB in-package PSRAM enabled as quad SPI. It has been flashed and it runs: the board boots, reports over USB, serves the page and drives the motors. The control core, the HAL adapter and the dashboard are written for the target, and the host simulator builds with them. The steering mapping is still uncalibrated, so the maneuver is unproven and the step response above is simulated.
