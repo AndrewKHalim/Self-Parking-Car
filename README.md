@@ -119,7 +119,14 @@ cd bench
 
 If the car pulls away backwards, the inversion flag for that side is wrong. If it does not move at all, the fault is in the motor wiring, the driver's power or its VM rail, and not the parking logic.
 
-The project also builds a steering sweep, `env:servo_sweep`, which steps the servo through 65 to 115 degrees in 5 degree steps, 1.5 s apart, and prints each angle with the pulse it sends. It is how the straight-ahead command and the wheel angle per servo degree are measured, because the control law works in wheel angle and writes servo degrees as if the two were equal.
+The project also builds a continuous servo test, `env:servo_test`, which holds the steering servo at centre for a second, then sweeps from 45 to 135 degrees and back, 5 degrees every 400 ms, until the power is cut. It prints each angle with the pulse it sends and whether the command is increasing or decreasing, and deliberately not which way the wheels point, because the linkage is mirrored in a way nobody has measured. The two ends are `main`'s clamped range, and the source says where to widen them.
+
+```bash
+cd bench
+../.venv/bin/pio run -e servo_test
+```
+
+The prebuilt image is `releases/servo_test.factory.bin`, flashed at `0x0` exactly as the parking image is.
 
 The same project builds an I2C scan, which is what to flash when the sensors do not answer:
 
