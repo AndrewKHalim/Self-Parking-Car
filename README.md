@@ -352,15 +352,19 @@ The ESP32 joins the network in `src/wifi_config.h`. If it cannot join within
 | `/ws` | one JSON snapshot at 10 Hz |
 
 The page shows state, `x` in millimetres, `psi` in degrees, the servo command
-in degrees, the filtered gaps, the rear, ready and fault, and has a start button
-that is disabled while `ready` is false. 8190 and 65535 show as `none`, and 0 to
-29 shows as `wall`. Under the cells it plots x, psi, the rear and the servo
-against time, four bands over the last 600 samples, which is one minute at the
-10 Hz socket. The history is a ring in the page, so the plots cost the control
-loop nothing, and 8190 and 65535 are drawn as gaps instead of as eight or
-sixty-five metres. The rear band carries the 90 mm stop line. There is no CSV.
-The JSON carries `x` in millimetres, `psi` and `psiRef` in milliradians and the
-servo in degrees.
+in degrees, the filtered gaps, the rear and the filtered rear side by side,
+ready and fault, and has a start button that is disabled while `ready` is false.
+The `rear` cell and the `rear raw` band are the raw frame, because that is the
+number the brake compares. 8190 and 65535 show as `none`, and 0 to 29 shows as
+`wall`. Under the cells it plots x, psi, the rear and the servo against time,
+four bands over the last 600 samples, which is one minute at the 10 Hz socket.
+The history is a ring in the page, so the plots cost the control loop nothing,
+and 8190 and 65535 are drawn as gaps instead of as eight or sixty-five metres.
+The rear band carries the 90 mm stop line and draws the filtered rear dim behind
+the raw one, so the lag is visible without being read as the stop input. There
+is no CSV. The JSON carries `x` in millimetres, `psi` and `psiRef` in
+milliradians, `rear` as the filtered rear, `rearRaw` as the frame the brake
+compares, and the servo in degrees.
 
 ## The layout
 
@@ -382,15 +386,17 @@ servo in degrees.
 `hw-2026-11-03.2` was flashed and driven by the owner. The car reversed at duty
 200 and stopped at the wall rather than at 90 mm, which is the defect this image
 fixes, and the page showed the rear sensor's numbers live through the run. This
-image, `hw-2026-11-03.3`, is build-verified only and has not been flashed.
+image, `hw-2026-11-03.4`, is build-verified only and has not been flashed.
+`hw-2026-11-03.3` was superseded before it was ever flashed, because its page
+plotted the filtered rear against a stop line the brake draws on the raw frame.
 
 The firmware builds and links for the ESP32-S3 Super Mini at 48,220 bytes of RAM
-(14.7 percent of 327,680) and 1,004,482 bytes of flash. The application partition
-is the 4,063,232-byte `app0` from `max_app_4MB.csv`, so the app uses 24.7
+(14.7 percent of 327,680) and 1,005,854 bytes of flash. The application partition
+is the 4,063,232-byte `app0` from `max_app_4MB.csv`, so the app uses 24.8
 percent of it. PlatformIO prints 12.0 percent because it divides by the board's
 8 MB `maximum_size`, which is not the figure to quote. The
-`releases/autoparking.factory.bin` built from this tree is 1,086,144 bytes, sha256
-`0813af8b8444969b654b0bda02fee52b3226457c60254321cefcd963089935b3`.
+`releases/autoparking.factory.bin` built from this tree is 1,087,520 bytes, sha256
+`2d4ecddeb76c8e4cc313d8ff7c025b7cd204522f9769eb5f80ca7f265f622038`.
 
 The four bench environments build. Duty 200 drives this car in reverse as well
 as forward, which the `hw-2026-11-03.2` run showed. The steering linkage, the

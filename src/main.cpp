@@ -228,21 +228,23 @@ void printBootConfig() {
 
 // One JSON object, every field an integer or a name. The gaps and the rear are
 // filtered millimetres, so 8190 and 65535 reach the page and it can say none.
+// rearRaw is the frame the brake compares, sent beside the filtered rear so the
+// page can show both and the lag is visible.
 // x is millimetres, psi and psiRef are milliradians, and the servo is degrees.
 // end
-void publish(unsigned long now) {
+void publish(unsigned long now, uint16_t rearRaw) {
   if (socket.count() == 0) return;
 
   static char line[320];
   snprintf(line, sizeof(line),
            "{\"t\":%lu,\"state\":\"%s\",\"fault\":\"%s\",\"x\":%ld,"
            "\"psi\":%ld,\"psiRef\":%ld,\"servo\":%d,\"gL\":%d,\"gR\":%d,"
-           "\"rear\":%d,\"ready\":%d}",
+           "\"rear\":%d,\"rearRaw\":%u,\"ready\":%d}",
            now, stateName(state_), faultName(fault_),
            (long)lroundf(pose_.x * 1000.0f),
            (long)lroundf(pose_.psi * 1000.0f),
            (long)lroundf(steerOut_.psiRef * 1000.0f), steerOut_.servoDeg,
-           (int)lroundf(gLf_), (int)lroundf(gRf_), (int)lroundf(rearF_),
+           (int)lroundf(gLf_), (int)lroundf(gRf_), (int)lroundf(rearF_), rearRaw,
            (int)ready_);
   socket.textAll(line);
 }
@@ -523,7 +525,7 @@ void loop() {
                   t, stateName(state_), pose_.x * 1000.0f, pose_.psi,
                   steerOut_.psiRef, steerOut_.servoDeg, gLf_, gRf_, rearF_,
                   r.rear, (int)ready_, faultName(fault_));
-    publish(t);
+    publish(t, r.rear);
     socket.cleanupClients();
   }
 
