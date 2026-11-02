@@ -37,10 +37,18 @@ struct Esp32Hal : Hal {
 
     Wire.begin(board::PIN_I2C_SDA, board::PIN_I2C_SCL);
 
-    // 1000 to 2000 us is the datasheet table, so 90 degrees lands on the SG90's 1500 us neutral and one commanded degree is one real degree.
-    servo.setPeriodHertz(50);
-    servo.attach(board::PIN_SERVO, 1000, 2000);
-    servo.write(90);
+    // Drive the servo exactly the way the main branch did: the library's own
+    // period and pulse range, and a whole degree per write. main called plain
+    // attach() and wrote 90, and that is the code that moved this car's wheels.
+    // The range this used to attach with, 1000 to 2000 us, is narrower than
+    // main's 544 to 2400. At the clamp the loop actually uses, 151.4 degrees,
+    // the old map sends 1841 us where main's sends 2105, so main's map swings
+    // the command wider for the same wheel angle. That is the difference being
+    // tested here. 1472 us is where main's map puts 90 degrees, and main drove
+    // with that as its centre.
+    servo.attach(board::PIN_SERVO);
+    servo.write((int)lroundf(servo::CENTRE_DEG));
+    // end
 
     // All three held in reset, then out of reset one at a time.
     pinMode(board::PIN_XSHUT_L, OUTPUT);

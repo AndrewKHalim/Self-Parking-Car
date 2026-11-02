@@ -42,7 +42,7 @@ inline float deltaEq(const Config&, float din, float dout) {
   return atanf(2.0f / s);
 }
 
-// Largest equivalent angle before the inner wheel's stop binds, about 20.2 deg.
+// Largest equivalent angle before the inner wheel's stop binds, 21.2 deg.
 inline float deltaEqMax(const Config& c) {
   const float lim = c.delta_max - c.servo_deadband;
   if (lim <= 1e-4f) return 0.0f;
