@@ -1,7 +1,7 @@
 name: release
 
-# A tag is the release. The binaries are committed under releases/, so the
-# runner only has to publish them and does not build anything.
+# A tag is the release. The factory image is committed under releases/, so the
+# runner only has to publish it and does not build anything.
 on:
   push:
     tags: ["hw-*", "bench-*"]
@@ -15,16 +15,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Publish the factory images
+      - name: Publish the factory image
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # The asset list is explicit on purpose, so a tag publishes only what
-          # was asked for. A new bench image must be added here before a tag can
-          # publish it. motor_test is never published because it drives the car
-          # the moment the board is powered.
+          # Re-pushing a tag replaces the build, so an existing release for this
+          # tag is dropped first. Without this, gh exits on "already exists" and
+          # the download keeps the previous binary.
+          gh release delete "$GITHUB_REF_NAME" --yes 2>/dev/null || true
           gh release create "$GITHUB_REF_NAME" \
             releases/autoparking.factory.bin \
-            releases/servo_test.factory.bin \
             --title "Build $GITHUB_REF_NAME" \
-            --notes "Ready-to-flash images for the ESP32-S3 Super Mini, both written at 0x0 with esptool. autoparking.factory.bin is the parking firmware. servo_test.factory.bin sweeps the steering servo left and right continuously, for bench checks of the steering only. Built from commit $GITHUB_SHA."
+            --notes "Ready-to-flash image for the ESP32-S3 Super Mini, written at 0x0 with esptool. Built from commit $GITHUB_SHA."
