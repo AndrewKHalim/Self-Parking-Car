@@ -37,7 +37,7 @@ static void scan(TwoWire& bus, int sda, int scl, const char* label) {
 // a device holding the bus down.
 static void levels(const char* label) {
   Serial.printf("--- line levels, %s\n", label);
-  const int pins[] = {board::PIN_I2C_SDA, board::PIN_I2C_SCL};
+  const int pins[] = {pins::I2C_SDA, pins::I2C_SCL};
   for (int p : pins) {
     pinMode(p, INPUT);
     delay(5);
@@ -57,18 +57,18 @@ void setup() {
   delay(300);
 
   // Out of reset, or nothing answers.
-  pinMode(board::PIN_XSHUT_L, OUTPUT);
-  pinMode(board::PIN_XSHUT_R, OUTPUT);
-  pinMode(board::PIN_XSHUT_REAR, OUTPUT);
-  digitalWrite(board::PIN_XSHUT_L, HIGH);
-  digitalWrite(board::PIN_XSHUT_R, HIGH);
-  digitalWrite(board::PIN_XSHUT_REAR, HIGH);
+  pinMode(pins::XSHUT_LEFT, OUTPUT);
+  pinMode(pins::XSHUT_RIGHT, OUTPUT);
+  pinMode(pins::XSHUT_REAR, OUTPUT);
+  digitalWrite(pins::XSHUT_LEFT, HIGH);
+  digitalWrite(pins::XSHUT_RIGHT, HIGH);
+  digitalWrite(pins::XSHUT_REAR, HIGH);
   delay(50);
 
   // Read back what the pads are doing, so a shorted XSHUT shows up as a pin
   // driven high that reads low.
-  const int shuts[] = {board::PIN_XSHUT_L, board::PIN_XSHUT_R,
-                       board::PIN_XSHUT_REAR};
+  const int shuts[] = {pins::XSHUT_LEFT, pins::XSHUT_RIGHT,
+                       pins::XSHUT_REAR};
   for (int p : shuts) {
     Serial.printf("--- xshut gpio %d reads %d when driven high\n", p,
                   digitalRead(p));
@@ -76,17 +76,17 @@ void setup() {
 
   levels("before the bus is opened");
 
-  const bool up = Wire.begin(board::PIN_I2C_SDA, board::PIN_I2C_SCL);
+  const bool up = Wire.begin(pins::I2C_SDA, pins::I2C_SCL);
   Serial.printf("wire begin %s\n", up ? "ok" : "FAILED");
-  scan(Wire, board::PIN_I2C_SDA, board::PIN_I2C_SCL, "as wired");
+  scan(Wire, pins::I2C_SDA, pins::I2C_SCL, "as wired");
   Wire.end();
   delay(10);
 
   levels("after the bus is closed");
 
-  const bool swapped = Wire.begin(board::PIN_I2C_SCL, board::PIN_I2C_SDA);
+  const bool swapped = Wire.begin(pins::I2C_SCL, pins::I2C_SDA);
   Serial.printf("wire begin swapped %s\n", swapped ? "ok" : "FAILED");
-  scan(Wire, board::PIN_I2C_SCL, board::PIN_I2C_SDA, "swapped");
+  scan(Wire, pins::I2C_SCL, pins::I2C_SDA, "swapped");
   Wire.end();
 
   Serial.println("scan done");

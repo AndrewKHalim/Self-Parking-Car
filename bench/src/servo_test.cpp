@@ -13,7 +13,7 @@
 
 #include "config.h"
 
-constexpr int PIN = board::PIN_SERVO;
+constexpr int PIN = pins::SERVO;
 constexpr uint32_t LEDC_HZ = 50;
 constexpr uint8_t LEDC_BITS = 16;
 constexpr uint32_t DWELL_MS = 400;
@@ -21,8 +21,9 @@ constexpr int CENTRE_DEG = 90;
 constexpr int STEP_DEG = 5;
 
 // main's clamped range, the 45 to 135 degrees its servo command never left.
-// The parking loop asks up to 151, so this range is not the full travel. Widen
-// either end here once the knuckles are known to clear their stops.
+// The ported steering law clamps wheel angles to MAX_WHEEL_DEG, which reaches
+// the same 45 to 135 at the servo. Widen either end here once the knuckles are
+// known to clear their stops.
 constexpr int LO_DEG = 45;
 constexpr int HI_DEG = 135;
 

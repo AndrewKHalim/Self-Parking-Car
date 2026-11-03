@@ -1,196 +1,233 @@
-// The runtime. Two FreeRTOS tasks, one core each. The 30 Hz control loop on core 1 touches I2C, servo and motor. The network side on core 0 waits on wifi and formats JSON, and neither may delay a sensor read. The supervisor belongs to the control task. The queue carries a copy of the telemetry, so the web side cannot read a half-updated state.
-
+// Runtime. Two FreeRTOS tasks, one core each: the 30 Hz control loop on core 1
+// owns I2C, servo and motors, the network task on core 0 owns WiFi and JSON and
+// may never delay a sensor read. The queue carries a copy of the telemetry, so
+// the web side cannot read a half-written state.
 #include <Arduino.h>
 #include <WiFi.h>
 
 #include <atomic>
-#include <cmath>
 #include <cstdio>
-#include <cstring>
 
 #include <ESPAsyncWebServer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
 
+#include "actuators.h"
 #include "config.h"
 #include "dashboard_html.h"
-#include "esp32_hal.h"
-#include "supervisor.h"
-#include "telemetry_ring.h"
-#include "wifi_config.h"
+#include "parking.h"
+#include "sensors.h"
 
-// The core map. Control sits on core 1 with the Arduino loop task. The web task and async TCP sit on core 0 beside wifi and lwip, pinned there by sdkconfig and by CONFIG_ASYNC_TCP_RUNNING_CORE in platformio.ini.
+// Control shares core 1 with the Arduino loop task; the async TCP stack is
+// pinned to core 0 by CONFIG_ASYNC_TCP_RUNNING_CORE in platformio.ini.
 constexpr BaseType_t CONTROL_CORE = 1;
 constexpr BaseType_t WEB_CORE = 0;
 
-// Stack sizes are bytes on the esp-idf port, not words. The control task holds the supervisor and reads three sensors per tick.
-constexpr uint32_t CONTROL_STACK = 8192;
+constexpr uint32_t CONTROL_STACK = 8192;  // bytes on the esp-idf port
 constexpr UBaseType_t CONTROL_PRIORITY = 5;
 constexpr uint32_t WEB_STACK = 8192;
 constexpr UBaseType_t WEB_PRIORITY = 2;
 
-// The handoff. One item, overwritten by the producer, so the consumer cannot fall behind and a slow socket cannot delay the control loop.
+// One slot, overwritten by the producer: the web side can never fall behind and
+// a slow socket can never delay the control loop.
 static QueueHandle_t telemetryQueue = nullptr;
 
-// The only word crossing the other way, and it is a request. A start always begins the reverse on the next tick.
-static std::atomic<bool> startRequest{false};
+// Requests crossing the other way. They only set flags; the control task reads
+// them on its next tick, so no HTTP handler ever waits on the car.
+static std::atomic<bool> startRequested{false};
+static std::atomic<bool> stopRequested{false};
+static std::atomic<uint16_t> pendingRearTargetMm{0};
+static std::atomic<uint16_t> pendingAlignDiffMm{0};
+// -1 leaves the cap alone; 0 is a legal value and means "no cap".
+static std::atomic<int16_t> pendingBackoffMax{-1};
+static std::atomic<int16_t> pendingDuty{-1};
+static std::atomic<int16_t> pendingSteerMs{-1};
+
+// A negative value means "unchanged", which is why the sentinel is -1: zero is
+// a legal gain (that term switched off).
+static std::atomic<float> pendingKp{-1.0f};
+static std::atomic<float> pendingKi{-1.0f};
+static std::atomic<float> pendingKd{-1.0f};
+
+// The gains the machine is actually running, so the page reports what is in
+// force rather than what the defaults happen to be.
+static std::atomic<float> liveKp{pid_defaults::KP};
+static std::atomic<float> liveKi{pid_defaults::KI};
+static std::atomic<float> liveKd{pid_defaults::KD};
 
 static AsyncWebServer server(80);
 static AsyncWebSocket socket("/ws");
-static Esp32Hal hal;
 
-// The run, kept on the board so a reload or a dropped socket does not lose it. The control task writes one record per tick and the web side reads it behind the ring's lock.
-static TelemetryRing runLog;
+static SensorBank sensorBank;
+static Actuators actuators;
 
-// One JSON object per message, numeric fields as integers. t is ms, rear, gL and gR are mm, servo degrees, and x and psi stay at zero because the pose is gone. fault names why a run gave up. seq is the ring record this sample came from, so the page can line it up with the CSV. strokes is the correction count.
-static void publishTelemetry(const Telemetry& t, uint32_t seq) {
-  if (socket.count() == 0) return;
-
-  static char line[320];
-  snprintf(line, sizeof(line),
-           "{\"t\":%lu,\"x\":%ld,\"psi\":%ld,\"rear\":%ld,\"servo\":%d,"
-           "\"phase\":\"%s\",\"fault\":\"%s\",\"strokes\":%d,\"valid\":%d,"
-           "\"gL\":%ld,\"gR\":%ld,\"seq\":%lu}",
-           (unsigned long)(t.t * 1000.0f),
-           (long)lroundf(t.x * 1000.0f),
-           (long)lroundf(t.psi * 1000.0f),
-           (long)lroundf(t.rear * 1000.0f),
-           (int)lroundf(t.servo),
-           phaseName(t.phase), faultName(t.fault), t.strokes,
-           (int)t.valid,
-           (long)lroundf(t.gL * 1000.0f),
-           (long)lroundf(t.gR * 1000.0f),
-           (unsigned long)seq);
-  socket.textAll(line);
-}
-
-// Slices the held run into fixed-width rows from the request offset, so the response is never buffered whole. first and total come from one snapshot taken when the request started.
-static size_t csvChunk(uint32_t first, uint32_t total, uint8_t* buffer,
-                       size_t maxLen, size_t index) {
-  const size_t rows = (total < first) ? 0 : (size_t)(total - first + 1);
-  const size_t end = CSV_HEADER_LEN + rows * CSV_ROW_LEN;
-  size_t n = 0;
-
-  while (n < maxLen && index < end) {
-    if (index < CSV_HEADER_LEN) {
-      size_t take = CSV_HEADER_LEN - index;
-      if (take > maxLen - n) take = maxLen - n;
-      memcpy(buffer + n, CSV_HEADER + index, take);
-      n += take;
-      index += take;
-      continue;
-    }
-
-    const size_t offset = index - CSV_HEADER_LEN;
-    const uint32_t seq = first + (uint32_t)(offset / CSV_ROW_LEN);
-    const size_t col = offset % CSV_ROW_LEN;
-
-    Sample s;
-    if (!runLog.get(seq, s)) break;
-
-    char row[CSV_ROW_LEN + 1];
-    TelemetryRing::csvRow(seq, s, row, sizeof(row));
-    size_t take = CSV_ROW_LEN - col;
-    if (take > maxLen - n) take = maxLen - n;
-    memcpy(buffer + n, row + col, take);
-    n += take;
-    index += take;
-  }
-
-  return n;
-}
-
-// The control task owns the supervisor and through it the HAL. After boot it is the only task that writes the servo, the motor or the I2C bus.
-static void controlTask(void* arg) {
-  Esp32Hal* h = static_cast<Esp32Hal*>(arg);
-
-  Supervisor sup;
-  sup.attach(h);
-
-  // vTaskDelayUntil keeps the period honest, where a plain delay would add the tick's own cost to every period.
-  TickType_t last = xTaskGetTickCount();
-
-  for (;;) {
-    if (startRequest.exchange(false)) {
-      sup.start();
-      Serial.println("start");
-    }
-
-    sup.update();
-    runLog.record(sup.tel);
-
-    // 10 Hz, every third 30 Hz tick, so a run reads on the serial line with no browser open. Units are spelled into the field names because a screenshot has no caption. x and psi stay at zero because the pose is gone, and fault names why a run gave up.
-    static uint32_t tick = 0;
-    if (++tick % 3 == 0) {
-      Serial.printf("%7.2fs %-9s x=%+6.1f psi=%+6.1f rear=%6.1f gL=%6.1f gR=%6.1f servo=%5.1f ok=%d strokes=%d fault=%s\n",
-                    sup.tel.t, phaseName(sup.tel.phase),
-                    sup.tel.x * 1000.0f, sup.tel.psi * 57.2958f,
-                    sup.tel.rear * 1000.0f, sup.tel.gL * 1000.0f,
-                    sup.tel.gR * 1000.0f, sup.tel.servo,
-                    (int)sup.tel.valid, sup.tel.strokes,
-                    faultName(sup.tel.fault));
-    }
-
-    xQueueOverwrite(telemetryQueue, &sup.tel);
-    vTaskDelayUntil(&last, pdMS_TO_TICKS(timing::CONTROL_PERIOD_MS));
-  }
-}
-
-// Join the configured network or fall back to an access point, so the page is reachable on a bench where that network is not there.
-static void connectNetwork() {
-  WiFi.setHostname(HOSTNAME);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  const uint32_t started = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - started < timing::WIFI_TIMEOUT_MS) {
-    delay(250);
-    Serial.print(".");
-  }
-
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.printf("\nwifi joined, open http://%s/\n", WiFi.localIP().toString().c_str());
+// One JSON object per message, integers where the firmware has integers. The
+// page prints the target and the gains so a run is self-describing.
+static void publishTelemetry(const Telemetry& t) {
+  if (socket.count() == 0) {
     return;
   }
 
-  Serial.printf("\nwifi not joined in %us, starting the access point\n",
-                (unsigned)(timing::WIFI_TIMEOUT_MS / 1000));
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(AP_SSID, AP_PASSWORD);
-  Serial.printf("ap %s password %s, open http://%s/\n", AP_SSID, AP_PASSWORD,
-                WiFi.softAPIP().toString().c_str());
+  static char line[288];
+  snprintf(line, sizeof(line),
+           "{\"t\":%lu,\"state\":\"%s\",\"gL\":%u,\"gR\":%u,\"diff\":%d,"
+           "\"rear\":%u,\"rearTarget\":%u,\"alignDiff\":%u,\"backoffMax\":%u,"
+           "\"duty\":%u,\"steerMs\":%u,\"servo\":%d,\"cycles\":%u,"
+           "\"backoffs\":%u,\"fault\":\"%s\",\"kp\":%.2f,\"ki\":%.3f,"
+           "\"kd\":%.2f}",
+           (unsigned long)t.t_ms, phaseName(t.phase), (unsigned)t.gL_mm,
+           (unsigned)t.gR_mm, (int)t.diff_mm, (unsigned)t.rear_mm,
+           (unsigned)t.rear_target_mm, (unsigned)t.align_diff_mm,
+           (unsigned)t.backoff_max, (unsigned)t.duty,
+           (unsigned)t.steer_settle_ms, (int)t.servo_deg, (unsigned)t.cycles,
+           (unsigned)t.backoffs, t.fault, liveKp.load(), liveKi.load(),
+           liveKd.load());
+  socket.textAll(line);
 }
 
-// Bring the network and server up, then publish telemetry every 100 ms. The async server runs its own task once started, so this one only feeds it.
+// The control task is the only writer of the servo, the motors and the bus.
+static void controlTask(void* arg) {
+  (void)arg;
+
+  ParkingMachine machine;
+  uint32_t tick = 0;
+  TickType_t last = xTaskGetTickCount();
+
+  for (;;) {
+    const uint16_t wanted_target = pendingRearTargetMm.exchange(0);
+    if (wanted_target != 0) {
+      machine.setRearTargetMm(wanted_target);
+    }
+
+    const uint16_t wanted_align = pendingAlignDiffMm.exchange(0);
+    if (wanted_align != 0) {
+      machine.setAlignDiffMm(wanted_align);
+    }
+
+    const int16_t wanted_backoff = pendingBackoffMax.exchange(-1);
+    if (wanted_backoff >= 0) {
+      machine.setBackoffMax((uint8_t)wanted_backoff);
+    }
+
+    const int16_t wanted_steer = pendingSteerMs.exchange(-1);
+    if (wanted_steer >= 0) {
+      machine.setSteerSettleMs((uint16_t)wanted_steer);
+    }
+
+    const int16_t wanted_duty = pendingDuty.exchange(-1);
+    if (wanted_duty >= 0) {
+      machine.setDuty((uint8_t)wanted_duty);
+    }
+
+    const float wanted_kp = pendingKp.exchange(-1.0f);
+    const float wanted_ki = pendingKi.exchange(-1.0f);
+    const float wanted_kd = pendingKd.exchange(-1.0f);
+    if (wanted_kp >= 0.0f || wanted_ki >= 0.0f || wanted_kd >= 0.0f) {
+      machine.setGains(wanted_kp, wanted_ki, wanted_kd);
+      liveKp.store(machine.config().kp);
+      liveKi.store(machine.config().ki);
+      liveKd.store(machine.config().kd);
+    }
+
+    const SensorReading reading = sensorBank.read();
+    const uint32_t now = millis();
+
+    // Stop wins over start: an abort must not be swallowed by a queued start.
+    if (stopRequested.exchange(false)) {
+      machine.stop(actuators);
+      Serial.println("stop");
+    } else if (startRequested.exchange(false)) {
+      machine.start(now, reading, actuators);
+      Serial.printf("start rear=%umm target=%umm\n", (unsigned)reading.rear_mm,
+                    (unsigned)machine.config().rear_target_mm);
+    }
+
+    const Telemetry t = machine.tick(now, reading, actuators);
+    xQueueOverwrite(telemetryQueue, &t);
+
+    // 10 Hz serial, so a run reads without a browser open. Units are spelled
+    // into the field names because a terminal capture has no caption.
+    if (++tick % 3 == 0) {
+      Serial.printf(
+          "t=%lu state=%s gL=%u gR=%u diff=%d rear=%u target=%u servo=%d "
+          "wheel=%.1f cycles=%u backoffs=%u fault=%s\n",
+          (unsigned long)t.t_ms, phaseName(t.phase), (unsigned)t.gL_mm,
+          (unsigned)t.gR_mm, (int)t.diff_mm, (unsigned)t.rear_mm,
+          (unsigned)t.rear_target_mm, (int)t.servo_deg, t.wheel_deg,
+          (unsigned)t.cycles, (unsigned)t.backoffs, t.fault);
+    }
+
+    vTaskDelayUntil(&last, pdMS_TO_TICKS(defaults::CONTROL_PERIOD_MS));
+  }
+}
+
+// The car is its own access point, so the page is reachable with no router and
+// no credentials to flash. Nothing is attempted in station mode.
+static void startAccessPoint() {
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(net_cfg::AP_SSID, net_cfg::AP_PASSWORD);
+  Serial.printf("ap %s password %s, open http://%s/\n", net_cfg::AP_SSID,
+                net_cfg::AP_PASSWORD, WiFi.softAPIP().toString().c_str());
+}
+
 static void webTask(void* arg) {
   (void)arg;
 
-  connectNetwork();
+  startAccessPoint();
 
   server.on("/", HTTP_GET, [](AsyncWebServerRequest* req) {
     req->send(200, "text/html", DASHBOARD_HTML);
   });
 
-  // The page's button. This runs in the socket task and only sets the flag, so it never blocks on the control loop.
-  server.on("/start", HTTP_GET, [](AsyncWebServerRequest* req) {
-    startRequest.store(true);
+  const auto handleStart = [](AsyncWebServerRequest* req) {
+    startRequested.store(true);
     req->send(200, "application/json", "{\"start\":true}");
-  });
+  };
+  server.on("/start", HTTP_POST, handleStart);
+  server.on("/start", HTTP_GET, handleStart);
 
-  // The whole held run as CSV, which is also the page's backfill source. The bounds are snapshotted once and the filler derives each row from the request offset, so a request allocates no buffer.
-  server.on("/log.csv", HTTP_GET, [](AsyncWebServerRequest* req) {
-    uint32_t first = 0;
-    uint32_t total = 0;
-    runLog.copySince(0, nullptr, 0, first, total);
-    AsyncWebServerResponse* res = req->beginChunkedResponse(
-        "text/csv",
-        [first, total](uint8_t* buffer, size_t maxLen, size_t index) {
-          return csvChunk(first, total, buffer, maxLen, index);
-        });
-    res->addHeader("Content-Disposition", "attachment; filename=\"log.csv\"");
-    req->send(res);
-  });
+  const auto handleStop = [](AsyncWebServerRequest* req) {
+    stopRequested.store(true);
+    req->send(200, "application/json", "{\"stop\":true}");
+  };
+  server.on("/stop", HTTP_POST, handleStop);
+  server.on("/stop", HTTP_GET, handleStop);
+
+  // Both are clamped by the machine, so an out-of-range value from the page
+  // cannot move the car into the wall or demand more than the servo delivers.
+  const auto handleConfig = [](AsyncWebServerRequest* req) {
+    if (req->hasParam("rear_target_mm")) {
+      pendingRearTargetMm.store(
+          (uint16_t)req->getParam("rear_target_mm")->value().toInt());
+    }
+    if (req->hasParam("align_diff_mm")) {
+      pendingAlignDiffMm.store(
+          (uint16_t)req->getParam("align_diff_mm")->value().toInt());
+    }
+    if (req->hasParam("backoff_max")) {
+      pendingBackoffMax.store(
+          (int16_t)req->getParam("backoff_max")->value().toInt());
+    }
+    if (req->hasParam("steer_ms")) {
+      pendingSteerMs.store((int16_t)req->getParam("steer_ms")->value().toInt());
+    }
+    if (req->hasParam("duty")) {
+      pendingDuty.store((int16_t)req->getParam("duty")->value().toInt());
+    }
+    if (req->hasParam("kp")) {
+      pendingKp.store(req->getParam("kp")->value().toFloat());
+    }
+    if (req->hasParam("ki")) {
+      pendingKi.store(req->getParam("ki")->value().toFloat());
+    }
+    if (req->hasParam("kd")) {
+      pendingKd.store(req->getParam("kd")->value().toFloat());
+    }
+    req->send(200, "application/json", "{\"config\":true}");
+  };
+  server.on("/config", HTTP_POST, handleConfig);
+  server.on("/config", HTTP_GET, handleConfig);
 
   server.addHandler(&socket);
   server.begin();
@@ -198,11 +235,14 @@ static void webTask(void* arg) {
   TickType_t last = xTaskGetTickCount();
   Telemetry t;
 
-  // One receive with no wait per period. If nothing has been published since the last look there is nothing to send, and the page keeps what it has.
   for (;;) {
-    if (xQueueReceive(telemetryQueue, &t, 0) == pdTRUE) publishTelemetry(t, runLog.total());
+    // Peek, not receive: the page gets the newest sample every period even if it
+    // has not changed, and the producer is never blocked by this task.
+    if (xQueuePeek(telemetryQueue, &t, 0) == pdTRUE) {
+      publishTelemetry(t);
+    }
     socket.cleanupClients();
-    vTaskDelayUntil(&last, pdMS_TO_TICKS(timing::TELEMETRY_PERIOD_MS));
+    vTaskDelayUntil(&last, pdMS_TO_TICKS(defaults::TELEMETRY_PERIOD_MS));
   }
 }
 
@@ -212,29 +252,34 @@ void setup() {
   Serial.println();
   Serial.println("autoparking-car: boot");
 
-  // One line names every value that decides a move, so a serial capture shows
-  // what this firmware was configured to do before the car is started.
-  // end
-  const Config boot;
-  Serial.printf("maneuver reverse=%u stroke=%u pull_angle=%.0f centre=%.0f pull_fwd=%ums pull_rev=%ums back_in_max=%ums trigger=%.0fmm corrections=%d\n",
-                (unsigned)boot.reverse_duty, (unsigned)boot.stroke_duty,
-                boot.pull_angle_deg, servo::CENTRE_DEG,
-                (unsigned)boot.pull_forward_ms,
-                (unsigned)boot.pull_reverse_ms,
-                (unsigned)boot.back_in_max_ms,
-                (boot.rear_target + boot.d_stop + boot.rear_margin) * 1000.0f,
-                boot.corrections_max);
+  // The bus and the address assignment come up before either task exists, since
+  // sharing them with a task already reading is not safe.
+  if (!sensorBank.begin()) {
+    Serial.println("one or more sensors did not answer");
+  }
+  actuators.begin();
 
-  // The hardware comes up before either worker exists, since the bus and the address assignment are not safe to share with a task already reading them.
-  if (!hal.begin()) Serial.println("one or more sensors did not answer");
+  Serial.printf(
+      "target=%umm tol=%umm align=%umm settle=%ums forward=%ums backoff=%ums "
+      "backoff_max=%u duty=%u servo_per_wheel=%.2f max_wheel=%.1f kp=%.2f "
+      "ki=%.3f kd=%.2f\n",
+      (unsigned)defaults::REAR_TARGET_MM, (unsigned)defaults::REAR_TOLERANCE_MM,
+      (unsigned)defaults::ALIGN_DIFF_MM, (unsigned)defaults::SETTLE_MS,
+      (unsigned)defaults::FORWARD_MOVE_MS, (unsigned)defaults::BACKOFF_MOVE_MS,
+      (unsigned)defaults::BACKOFF_MAX, (unsigned)drive::DUTY,
+      steering::SERVO_PER_WHEEL_DEG,
+      steering::MAX_WHEEL_DEG, pid_defaults::KP, pid_defaults::KI,
+      pid_defaults::KD);
 
   telemetryQueue = xQueueCreate(1, sizeof(Telemetry));
   if (telemetryQueue == nullptr) {
     Serial.println("no heap for the telemetry queue");
-    for (;;) delay(1000);
+    for (;;) {
+      delay(1000);
+    }
   }
 
-  if (xTaskCreatePinnedToCore(controlTask, "control", CONTROL_STACK, &hal,
+  if (xTaskCreatePinnedToCore(controlTask, "control", CONTROL_STACK, nullptr,
                               CONTROL_PRIORITY, nullptr, CONTROL_CORE) != pdPASS) {
     Serial.println("control task not created");
   }
@@ -247,7 +292,7 @@ void setup() {
 }
 
 void loop() {
-  // The work is in the two tasks. This says the runtime is alive and touches nothing the car depends on.
+  // The work lives in the two tasks. This only says the runtime is alive.
   delay(5000);
   Serial.printf("alive %lus heap %luB\n", (unsigned long)(millis() / 1000UL),
                 (unsigned long)ESP.getFreeHeap());
