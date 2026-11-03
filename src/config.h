@@ -81,12 +81,22 @@ constexpr float WHEELBASE_MM = 183.0f;
 constexpr float KINGPIN_SPACING_MM = 90.5f;
 constexpr float MAX_WIDTH_MM = 119.5f;
 
-// Side sensor faces, both aimed straight outboard, so a difference between the
-// two readings is a lateral offset and not a heading error.
+// Side sensor faces, both aimed straight outboard. They are not at the same
+// station: the right one sits 80 mm further forward, so gL - gR carries a
+// heading term as well as the lateral offset and has to be corrected before it
+// can be read as an offset.
 constexpr float SIDE_SENSOR_SPAN_MM = 95.0f;
 constexpr float LEFT_AHEAD_AXLE_MM = 67.0f;
 constexpr float RIGHT_AHEAD_AXLE_MM = 147.0f;
 constexpr float REAR_BEHIND_AXLE_MM = 35.5f;
+
+// Geometric centre of the 234 mm body ahead of the rear axle: 234/2 - 35.5.
+constexpr float CENTRE_AHEAD_AXLE_MM = 0.5f * LENGTH_MM - REAR_BEHIND_AXLE_MM;
+// Sum of the longitudinal sensor offsets from that centre. The 80 mm stagger
+// leaves this at +51.0 mm, the coefficient that scales tan(psi) out of gL - gR.
+constexpr float STAGGER_COEFF_MM =
+    (LEFT_AHEAD_AXLE_MM - CENTRE_AHEAD_AXLE_MM) +
+    (RIGHT_AHEAD_AXLE_MM - CENTRE_AHEAD_AXLE_MM);
 }  // namespace chassis
 
 namespace steering {
@@ -151,6 +161,18 @@ constexpr uint32_t BACKOFF_MOVE_MS = 500;
 constexpr uint8_t BACKOFF_MAX = 3;
 constexpr uint8_t BACKOFF_MAX_MAX = 20;
 constexpr uint32_t REVERSE_TIMEOUT_MS = 6000;
+
+// Heading gate: a run only counts as perpendicular when the reverse-leg slope
+// says the car is within this many degrees of the rear wall's normal.
+constexpr float YAW_TOL_DEG = 3.0f;
+constexpr float YAW_TOL_MIN_DEG = 0.5f;
+constexpr float YAW_TOL_MAX_DEG = 25.0f;
+// Slope from two samples only means something once the car has actually moved;
+// below this span the difference is sensor noise divided by a few millimetres.
+constexpr uint16_t MIN_REVERSE_SPAN_MM = 25;
+// tan(40 deg): a real bay never asks for more, and the clamp keeps one bad
+// sample from swinging the stagger correction across the whole range.
+constexpr float MAX_TAN_PSI = 0.84f;
 constexpr uint32_t CONTROL_PERIOD_MS = 33;
 constexpr uint32_t TELEMETRY_PERIOD_MS = 100;
 }  // namespace defaults
@@ -166,6 +188,11 @@ constexpr float MAX_I_WHEEL_DEG = 5.0f;
 constexpr float KP_MAX = 5.0f;
 constexpr float KI_MAX = 1.0f;
 constexpr float KD_MAX = 1.0f;
+
+// Proportional heading trim, in road-wheel degrees per degree of yaw error.
+// Split over the two halves of the S-curve, so this is the full correction.
+constexpr float K_YAW = 0.60f;
+constexpr float K_YAW_MAX = 3.0f;
 }  // namespace pid_defaults
 
 // Runtime-mutable tuning. Kept in one struct so the WebUI can move a value
@@ -181,6 +208,8 @@ struct TuningConfig {
     float kp = pid_defaults::KP;
     float ki = pid_defaults::KI;
     float kd = pid_defaults::KD;
+    float yaw_tol_deg = defaults::YAW_TOL_DEG;
+    float k_yaw = pid_defaults::K_YAW;
 };
 
 // The car is its own access point. No router credentials: there is nothing to

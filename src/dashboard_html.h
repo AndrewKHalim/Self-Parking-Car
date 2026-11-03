@@ -59,6 +59,8 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(<!doctype html>
   <div class="cell"><span class="k">gL</span><span class="v" id="v-gl">-</span></div>
   <div class="cell"><span class="k">gR</span><span class="v" id="v-gr">-</span></div>
   <div class="cell"><span class="k">diff</span><span class="v" id="v-diff">-</span></div>
+  <div class="cell"><span class="k">yaw</span><span class="v" id="v-yaw">-</span></div>
+  <div class="cell"><span class="k">Kyaw</span><span class="v" id="v-kyaw">-</span></div>
   <div class="cell"><span class="k">rear</span><span class="v" id="v-rear">-</span></div>
   <div class="cell"><span class="k">rear target</span><span class="v" id="v-target">-</span></div>
   <div class="cell"><span class="k">align tol</span><span class="v" id="v-align">-</span></div>
@@ -92,6 +94,8 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(<!doctype html>
     <input id="in-duty" type="number" min="0" max="255" step="1" value="180"></label>
   <label class="lab"><span class="k">steer ms</span>
     <input id="in-steer" type="number" min="0" max="2000" step="50" value="600"></label>
+  <label class="lab"><span class="k">yaw deg</span>
+    <input id="in-yaw-tol" type="number" min="0.5" max="25" step="0.5" value="3"></label>
   <button id="set-target">apply</button>
 </div>
 <div class="row">
@@ -101,6 +105,8 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(<!doctype html>
     <input id="in-ki" type="number" min="0" max="1" step="0.001" value="0.01"></label>
   <label class="lab"><span class="k">Kd</span>
     <input id="in-kd" type="number" min="0" max="1" step="0.01" value="0.02"></label>
+  <label class="lab"><span class="k">Kyaw</span>
+    <input id="in-kyaw" type="number" min="0" max="3" step="0.05" value="0.60"></label>
   <button id="set-gains">set gains</button>
 </div>
 <div class="row">
@@ -125,7 +131,8 @@ const AXES = [
     lines: [{ key: 'servo', colour: '#bb9af7' }] }
 ];
 
-const BUSY = ['reverse', 'settle_rear', 'steer', 'forward', 'settle_fwd'];
+const BUSY = ['reverse', 'settle_rear', 'steer', 'forward', 'steer_counter',
+              'forward_counter', 'settle_fwd'];
 
 let pts = [];
 let rearTarget = 90;
@@ -170,6 +177,8 @@ function show(d) {
   byId('v-gl').textContent = mm(d.gL, 'none');
   byId('v-gr').textContent = mm(d.gR, 'none');
   byId('v-diff').textContent = mm(Math.abs(d.diff), 'none');
+  byId('v-yaw').textContent = d.yaw.toFixed(1) + '\u00b0';
+  byId('v-kyaw').textContent = d.kYaw;
   byId('v-rear').textContent = mm(d.rear, 'far');
   byId('v-target').textContent = d.rearTarget + ' mm';
   byId('v-align').textContent = d.alignDiff + ' mm';
@@ -192,9 +201,11 @@ function show(d) {
     byId('in-backoff').value = d.backoffMax;
     byId('in-duty').value = d.duty;
     byId('in-steer').value = d.steerMs;
+    byId('in-yaw-tol').value = d.yawTol;
     byId('in-kp').value = d.kp;
     byId('in-ki').value = d.ki;
     byId('in-kd').value = d.kd;
+    byId('in-kyaw').value = d.kYaw;
     inputsSeeded = true;
   }
   startButton.disabled = BUSY.indexOf(d.state) !== -1;
@@ -338,7 +349,8 @@ window.addEventListener('resize', draw);
 // retargeted without a reflash. Out-of-range values are clamped on the board.
 byId('set-target').addEventListener('click', () => {
   const q = [['rear_target_mm', 'in-rear-target'], ['align_diff_mm', 'in-align-diff'],
-    ['backoff_max', 'in-backoff'], ['duty', 'in-duty'], ['steer_ms', 'in-steer']]
+    ['backoff_max', 'in-backoff'], ['duty', 'in-duty'], ['steer_ms', 'in-steer'],
+    ['yaw_tol_deg', 'in-yaw-tol']]
     .map(([k, id]) => {
       const v = Number(byId(id).value);
       return Number.isFinite(v) ? k + '=' + encodeURIComponent(v) : null;
@@ -351,9 +363,14 @@ byId('set-gains').addEventListener('click', () => {
   const q = ['kp', 'ki', 'kd'].map((k) => {
     const v = Number(byId('in-' + k).value);
     return Number.isFinite(v) ? k + '=' + encodeURIComponent(v) : null;
-  }).filter(Boolean);
-  if (!q.length) return;
-  fetch('/config?' + q.join('&'), { method: 'POST' }).catch(() => {});
+  });
+  // The input id is in-kyaw but the board's query key is k_yaw, so it is not
+  // part of the loop above.
+  const kyaw = Number(byId('in-kyaw').value);
+  if (Number.isFinite(kyaw)) q.push('k_yaw=' + encodeURIComponent(kyaw));
+  const fields = q.filter(Boolean);
+  if (!fields.length) return;
+  fetch('/config?' + fields.join('&'), { method: 'POST' }).catch(() => {});
 });
 
 startButton.addEventListener('click', () => {
