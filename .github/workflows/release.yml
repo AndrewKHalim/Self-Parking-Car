@@ -19,6 +19,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Re-pushing a tag replaces the build, so an existing release for this
+          # tag is dropped first. Without this, gh exits on "already exists" and
+          # the download keeps the previous binary.
+          gh release delete "$GITHUB_REF_NAME" --yes 2>/dev/null || true
           gh release create "$GITHUB_REF_NAME" \
             releases/autoparking.factory.bin \
             --title "Build $GITHUB_REF_NAME" \

@@ -109,19 +109,19 @@ static_assert(SERVO_CENTRE_DEG + MAX_WHEEL_DEG * SERVO_PER_WHEEL_DEG <= SERVO_MA
 static_assert(SERVO_CENTRE_DEG - MAX_WHEEL_DEG * SERVO_PER_WHEEL_DEG >= SERVO_MIN_DEG,
               "MAX_WHEEL_DEG exceeds the servo travel");
 
-// Bench result: with +1 the wheels turned left while the car stood closer to
-// the right wall, so the linkage is mirrored against the servo's angle and the
-// correction has to be negated. Flip back to +1 only if the horn is remounted.
-constexpr int STEER_SIGN = -1;
+// Flipped twice on the bench: -1 was reported as steering the wrong way, so the
+// correction is negated again. This is the mapping that matches the linkage.
+constexpr int STEER_SIGN = 1;
 }  // namespace steering
 
 namespace drive {
 constexpr uint32_t PWM_HZ = 20000;  // above hearing on a DRV8833
 constexpr uint8_t PWM_BITS = 8;
-// 127 of 255, half power. Bench report: 200 drove both legs too fast, which
-// costs travel the rear band has to absorb.
-constexpr uint8_t DUTY_REVERSE = 127;
-constexpr uint8_t DUTY_FORWARD = 127;
+// Default duty for both legs. Bench settled between 127 (too slow to finish a
+// reverse leg) and 200 (too fast for the rear band). Runtime-adjustable, which
+// is also the knob to reach for when a reverse leg runs out of its timeout.
+constexpr uint8_t DUTY = 180;
+constexpr uint8_t DUTY_MAX = 255;
 }  // namespace drive
 
 namespace defaults {
@@ -129,11 +129,16 @@ constexpr uint16_t REAR_TARGET_MM = 90;  // 9 cm stop distance, WebUI-adjustable
 constexpr uint16_t REAR_TARGET_MIN_MM = 30;
 constexpr uint16_t REAR_TARGET_MAX_MM = 500;
 
-constexpr uint16_t ALIGN_DIFF_MM = 10;  // |gL - gR| that counts as aligned
+constexpr uint16_t ALIGN_DIFF_MM = 5;  // |gL - gR| that counts as aligned
 constexpr uint16_t ALIGN_DIFF_MIN_MM = 1;
 constexpr uint16_t ALIGN_DIFF_MAX_MM = 200;
 
 constexpr uint32_t SETTLE_MS = 200;      // motors braked before sampling
+// Time the servo gets, with the motors braked, to reach the angle it was just
+// given. 200 ms is enough for the chassis to stop, not for a 45 degree swing
+// through the rack, so steering and reversing each wait this long first.
+constexpr uint32_t STEER_SETTLE_MS = 600;
+constexpr uint32_t STEER_SETTLE_MAX_MS = 2000;
 constexpr uint32_t FORWARD_MOVE_MS = 1000;
 // Half of the 1 cm band the rear target is allowed. Stopping closer than this
 // is treated as an overshoot, not as parked.
@@ -170,7 +175,9 @@ struct TuningConfig {
     uint16_t align_diff_mm = defaults::ALIGN_DIFF_MM;
     uint32_t settle_ms = defaults::SETTLE_MS;
     uint32_t forward_move_ms = defaults::FORWARD_MOVE_MS;
+    uint32_t steer_settle_ms = defaults::STEER_SETTLE_MS;
     uint8_t backoff_max = defaults::BACKOFF_MAX;
+    uint8_t duty = drive::DUTY;
     float kp = pid_defaults::KP;
     float ki = pid_defaults::KI;
     float kd = pid_defaults::KD;
