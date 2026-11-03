@@ -118,10 +118,12 @@ constexpr int STEER_SIGN = -1;
 namespace drive {
 constexpr uint32_t PWM_HZ = 20000;  // above hearing on a DRV8833
 constexpr uint8_t PWM_BITS = 8;
-// 127 of 255, half power. Bench report: 200 drove both legs too fast, which
-// costs travel the rear band has to absorb.
-constexpr uint8_t DUTY_REVERSE = 127;
-constexpr uint8_t DUTY_FORWARD = 127;
+// Default duty for both legs. Bench report: 200 drove both legs too fast, so
+// the car covered more ground than the rear band can absorb; 127 is half power.
+// The WebUI can move this at runtime, which is also the knob to reach for when
+// a reverse leg runs out of its timeout.
+constexpr uint8_t DUTY = 127;
+constexpr uint8_t DUTY_MAX = 255;
 }  // namespace drive
 
 namespace defaults {
@@ -171,6 +173,7 @@ struct TuningConfig {
     uint32_t settle_ms = defaults::SETTLE_MS;
     uint32_t forward_move_ms = defaults::FORWARD_MOVE_MS;
     uint8_t backoff_max = defaults::BACKOFF_MAX;
+    uint8_t duty = drive::DUTY;
     float kp = pid_defaults::KP;
     float ki = pid_defaults::KI;
     float kd = pid_defaults::KD;

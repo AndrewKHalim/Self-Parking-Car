@@ -41,6 +41,7 @@ static std::atomic<uint16_t> pendingRearTargetMm{0};
 static std::atomic<uint16_t> pendingAlignDiffMm{0};
 // -1 leaves the cap alone; 0 is a legal value and means "no cap".
 static std::atomic<int16_t> pendingBackoffMax{-1};
+static std::atomic<int16_t> pendingDuty{-1};
 
 // A negative value means "unchanged", which is why the sentinel is -1: zero is
 // a legal gain (that term switched off).
@@ -71,14 +72,14 @@ static void publishTelemetry(const Telemetry& t) {
   snprintf(line, sizeof(line),
            "{\"t\":%lu,\"state\":\"%s\",\"gL\":%u,\"gR\":%u,\"diff\":%d,"
            "\"rear\":%u,\"rearTarget\":%u,\"alignDiff\":%u,\"backoffMax\":%u,"
-           "\"servo\":%d,\"cycles\":%u,\"backoffs\":%u,\"fault\":\"%s\","
-           "\"kp\":%.2f,\"ki\":%.3f,\"kd\":%.2f}",
+           "\"duty\":%u,\"servo\":%d,\"cycles\":%u,\"backoffs\":%u,"
+           "\"fault\":\"%s\",\"kp\":%.2f,\"ki\":%.3f,\"kd\":%.2f}",
            (unsigned long)t.t_ms, phaseName(t.phase), (unsigned)t.gL_mm,
            (unsigned)t.gR_mm, (int)t.diff_mm, (unsigned)t.rear_mm,
            (unsigned)t.rear_target_mm, (unsigned)t.align_diff_mm,
-           (unsigned)t.backoff_max, (int)t.servo_deg, (unsigned)t.cycles,
-           (unsigned)t.backoffs, t.fault, liveKp.load(), liveKi.load(),
-           liveKd.load());
+           (unsigned)t.backoff_max, (unsigned)t.duty, (int)t.servo_deg,
+           (unsigned)t.cycles, (unsigned)t.backoffs, t.fault, liveKp.load(),
+           liveKi.load(), liveKd.load());
   socket.textAll(line);
 }
 
@@ -104,6 +105,11 @@ static void controlTask(void* arg) {
     const int16_t wanted_backoff = pendingBackoffMax.exchange(-1);
     if (wanted_backoff >= 0) {
       machine.setBackoffMax((uint8_t)wanted_backoff);
+    }
+
+    const int16_t wanted_duty = pendingDuty.exchange(-1);
+    if (wanted_duty >= 0) {
+      machine.setDuty((uint8_t)wanted_duty);
     }
 
     const float wanted_kp = pendingKp.exchange(-1.0f);
@@ -195,6 +201,9 @@ static void webTask(void* arg) {
       pendingBackoffMax.store(
           (int16_t)req->getParam("backoff_max")->value().toInt());
     }
+    if (req->hasParam("duty")) {
+      pendingDuty.store((int16_t)req->getParam("duty")->value().toInt());
+    }
     if (req->hasParam("kp")) {
       pendingKp.store(req->getParam("kp")->value().toFloat());
     }
@@ -241,12 +250,13 @@ void setup() {
 
   Serial.printf(
       "target=%umm tol=%umm align=%umm settle=%ums forward=%ums backoff=%ums "
-      "backoff_max=%u servo_per_wheel=%.2f max_wheel=%.1f kp=%.2f ki=%.3f "
-      "kd=%.2f\n",
+      "backoff_max=%u duty=%u servo_per_wheel=%.2f max_wheel=%.1f kp=%.2f "
+      "ki=%.3f kd=%.2f\n",
       (unsigned)defaults::REAR_TARGET_MM, (unsigned)defaults::REAR_TOLERANCE_MM,
       (unsigned)defaults::ALIGN_DIFF_MM, (unsigned)defaults::SETTLE_MS,
       (unsigned)defaults::FORWARD_MOVE_MS, (unsigned)defaults::BACKOFF_MOVE_MS,
-      (unsigned)defaults::BACKOFF_MAX, steering::SERVO_PER_WHEEL_DEG,
+      (unsigned)defaults::BACKOFF_MAX, (unsigned)drive::DUTY,
+      steering::SERVO_PER_WHEEL_DEG,
       steering::MAX_WHEEL_DEG, pid_defaults::KP, pid_defaults::KI,
       pid_defaults::KD);
 

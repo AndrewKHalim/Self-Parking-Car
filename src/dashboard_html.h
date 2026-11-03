@@ -34,10 +34,11 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(<!doctype html>
             color: #9a9a9a; }
   .legend i { display: inline-block; width: 10px; height: 10px; margin-right: 6px;
               border-radius: 2px; }
-  .row { display: flex; gap: 8px; align-items: stretch; margin-top: 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch;
+         margin-top: 12px; }
   input { flex: 1; min-width: 0; padding: 14px; font-size: 1rem; color: #e8e8e8;
           background: #1b1b1b; border: 1px solid #262626; border-radius: 10px; }
-  .lab { flex: 1; min-width: 0; }
+  .lab { flex: 1 1 64px; min-width: 64px; }
   .lab input { width: 100%; }
   button { padding: 14px 16px; font-size: 1rem; border: 0; border-radius: 10px;
            background: #2d6cdf; color: #fff; }
@@ -62,6 +63,7 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(<!doctype html>
   <div class="cell"><span class="k">servo</span><span class="v" id="v-servo">-</span></div>
   <div class="cell"><span class="k">cycles</span><span class="v" id="v-cycles">-</span></div>
   <div class="cell"><span class="k">pull-backs</span><span class="v" id="v-backoffs">-</span></div>
+  <div class="cell"><span class="k">duty</span><span class="v" id="v-duty">-</span></div>
   <div class="cell"><span class="k">fault</span><span class="v" id="v-fault">-</span></div>
   <div class="cell"><span class="k">Kp</span><span class="v" id="v-kp">-</span></div>
   <div class="cell"><span class="k">Ki</span><span class="v" id="v-ki">-</span></div>
@@ -78,12 +80,14 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(<!doctype html>
 <canvas id="chart"></canvas>
 
 <div class="row">
-  <label class="lab"><span class="k">rear target mm</span>
+  <label class="lab"><span class="k">target mm</span>
     <input id="in-rear-target" type="number" min="30" max="500" step="5" value="90"></label>
-  <label class="lab"><span class="k">align tol mm</span>
+  <label class="lab"><span class="k">tol mm</span>
     <input id="in-align-diff" type="number" min="1" max="200" step="1" value="10"></label>
-  <label class="lab"><span class="k">pull-backs</span>
+  <label class="lab"><span class="k">pulls</span>
     <input id="in-backoff" type="number" min="0" max="20" step="1" value="3"></label>
+  <label class="lab"><span class="k">duty</span>
+    <input id="in-duty" type="number" min="0" max="255" step="1" value="127"></label>
   <button id="set-target">apply</button>
 </div>
 <div class="row">
@@ -168,6 +172,7 @@ function show(d) {
   byId('v-servo').textContent = d.servo + '\u00b0';
   byId('v-cycles').textContent = d.cycles;
   byId('v-backoffs').textContent = d.backoffs;
+  byId('v-duty').textContent = d.duty;
   byId('v-fault').textContent = d.fault;
   byId('v-kp').textContent = d.kp;
   byId('v-ki').textContent = d.ki;
@@ -181,6 +186,7 @@ function show(d) {
     byId('in-rear-target').value = rearTarget;
     byId('in-align-diff').value = d.alignDiff;
     byId('in-backoff').value = d.backoffMax;
+    byId('in-duty').value = d.duty;
     byId('in-kp').value = d.kp;
     byId('in-ki').value = d.ki;
     byId('in-kd').value = d.kd;
@@ -327,7 +333,7 @@ window.addEventListener('resize', draw);
 // retargeted without a reflash. Out-of-range values are clamped on the board.
 byId('set-target').addEventListener('click', () => {
   const q = [['rear_target_mm', 'in-rear-target'], ['align_diff_mm', 'in-align-diff'],
-    ['backoff_max', 'in-backoff']]
+    ['backoff_max', 'in-backoff'], ['duty', 'in-duty']]
     .map(([k, id]) => {
       const v = Number(byId(id).value);
       return Number.isFinite(v) ? k + '=' + encodeURIComponent(v) : null;
