@@ -22,6 +22,7 @@ enum class Phase : uint8_t {
     IDLE = 0,
     REVERSE,
     SETTLE_REAR,
+    STEER_WAIT,
     FORWARD_CORRECT,
     SETTLE_FORWARD,
     PARKED,
@@ -33,6 +34,7 @@ inline const char* phaseName(Phase p) {
         case Phase::IDLE: return "idle";
         case Phase::REVERSE: return "reverse";
         case Phase::SETTLE_REAR: return "settle_rear";
+        case Phase::STEER_WAIT: return "steer";
         case Phase::FORWARD_CORRECT: return "forward";
         case Phase::SETTLE_FORWARD: return "settle_fwd";
         case Phase::PARKED: return "parked";
@@ -51,6 +53,7 @@ struct Telemetry {
     uint16_t align_diff_mm;
     uint8_t backoff_max;
     uint8_t duty;
+    uint16_t steer_settle_ms;
     int16_t servo_deg;
     float wheel_deg;
     uint16_t cycles;
@@ -67,6 +70,10 @@ public:
     void setRearTargetMm(uint16_t mm) {
         cfg_.rear_target_mm =
             (uint16_t)util::clampi(mm, defaults::REAR_TARGET_MIN_MM, defaults::REAR_TARGET_MAX_MM);
+    }
+
+    void setSteerSettleMs(uint16_t ms) {
+        cfg_.steer_settle_ms = ms > defaults::STEER_SETTLE_MAX_MS ? defaults::STEER_SETTLE_MAX_MS : ms;
     }
 
     void setDuty(uint8_t duty) {
@@ -163,6 +170,18 @@ public:
                 }
                 break;
 
+            case Phase::STEER_WAIT:
+                // Wheels first, motors second: hold the angle and stay braked
+                // until the servo has had time to arrive.
+                act.brake();
+                act.setWheelAngleDeg(wheel_deg_);
+                if (elapsed >= turnWaitMs()) {
+                    act.forward(cfg_.duty);
+                    phase_start_ms_ = now_ms;
+                    phase_ = Phase::FORWARD_CORRECT;
+                }
+                break;
+
             case Phase::FORWARD_CORRECT:
                 act.forward(cfg_.duty);
                 if (elapsed >= move_ms_) {
@@ -177,7 +196,7 @@ public:
             case Phase::SETTLE_FORWARD:
                 act.brake();
                 act.setServoDeg(steering::SERVO_CENTRE_DEG);
-                if (elapsed >= cfg_.settle_ms) {
+                if (elapsed >= turnWaitMs()) {
                     phase_start_ms_ = now_ms;
                     if (s.rear_valid && atRearTarget(s.rear_mm)) {
                         phase_ = Phase::SETTLE_REAR;
@@ -193,6 +212,12 @@ public:
     }
 
 private:
+    // Whichever wait is longer: the chassis settling and the servo travelling
+    // are different clocks.
+    uint32_t turnWaitMs() const {
+        return cfg_.steer_settle_ms > cfg_.settle_ms ? cfg_.steer_settle_ms : cfg_.settle_ms;
+    }
+
     // The band the tail is allowed: half the tolerance above the target. Braking
     // at the top of it leaves room for the frame the brake costs.
     bool atRearTarget(uint16_t rear_mm) const {
@@ -250,10 +275,10 @@ private:
         act.setWheelAngleDeg(wheel_deg_);
         ++cycles_;
 
-        act.forward(cfg_.duty);
+        // The motors stay off until the wheels are where the PID asked.
         move_ms_ = cfg_.forward_move_ms;
         phase_start_ms_ = now_ms;
-        phase_ = Phase::FORWARD_CORRECT;
+        phase_ = Phase::STEER_WAIT;
     }
 
     Telemetry snapshot(uint32_t now_ms, const SensorReading& s, Actuators& act) const {
@@ -267,6 +292,7 @@ private:
         t.align_diff_mm = cfg_.align_diff_mm;
         t.backoff_max = cfg_.backoff_max;
         t.duty = cfg_.duty;
+        t.steer_settle_ms = (uint16_t)cfg_.steer_settle_ms;
         t.servo_deg = (int16_t)act.servoDeg();
         t.wheel_deg = wheel_deg_;
         t.cycles = cycles_;

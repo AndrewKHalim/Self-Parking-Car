@@ -136,6 +136,11 @@ constexpr uint16_t ALIGN_DIFF_MIN_MM = 1;
 constexpr uint16_t ALIGN_DIFF_MAX_MM = 200;
 
 constexpr uint32_t SETTLE_MS = 200;      // motors braked before sampling
+// Time the servo gets, with the motors braked, to reach the angle it was just
+// given. 200 ms is enough for the chassis to stop, not for a 45 degree swing
+// through the rack, so steering and reversing each wait this long first.
+constexpr uint32_t STEER_SETTLE_MS = 600;
+constexpr uint32_t STEER_SETTLE_MAX_MS = 2000;
 constexpr uint32_t FORWARD_MOVE_MS = 1000;
 // Half of the 1 cm band the rear target is allowed. Stopping closer than this
 // is treated as an overshoot, not as parked.
@@ -172,6 +177,7 @@ struct TuningConfig {
     uint16_t align_diff_mm = defaults::ALIGN_DIFF_MM;
     uint32_t settle_ms = defaults::SETTLE_MS;
     uint32_t forward_move_ms = defaults::FORWARD_MOVE_MS;
+    uint32_t steer_settle_ms = defaults::STEER_SETTLE_MS;
     uint8_t backoff_max = defaults::BACKOFF_MAX;
     uint8_t duty = drive::DUTY;
     float kp = pid_defaults::KP;

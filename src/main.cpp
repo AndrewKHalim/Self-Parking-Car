@@ -42,6 +42,7 @@ static std::atomic<uint16_t> pendingAlignDiffMm{0};
 // -1 leaves the cap alone; 0 is a legal value and means "no cap".
 static std::atomic<int16_t> pendingBackoffMax{-1};
 static std::atomic<int16_t> pendingDuty{-1};
+static std::atomic<int16_t> pendingSteerMs{-1};
 
 // A negative value means "unchanged", which is why the sentinel is -1: zero is
 // a legal gain (that term switched off).
@@ -72,14 +73,16 @@ static void publishTelemetry(const Telemetry& t) {
   snprintf(line, sizeof(line),
            "{\"t\":%lu,\"state\":\"%s\",\"gL\":%u,\"gR\":%u,\"diff\":%d,"
            "\"rear\":%u,\"rearTarget\":%u,\"alignDiff\":%u,\"backoffMax\":%u,"
-           "\"duty\":%u,\"servo\":%d,\"cycles\":%u,\"backoffs\":%u,"
-           "\"fault\":\"%s\",\"kp\":%.2f,\"ki\":%.3f,\"kd\":%.2f}",
+           "\"duty\":%u,\"steerMs\":%u,\"servo\":%d,\"cycles\":%u,"
+           "\"backoffs\":%u,\"fault\":\"%s\",\"kp\":%.2f,\"ki\":%.3f,"
+           "\"kd\":%.2f}",
            (unsigned long)t.t_ms, phaseName(t.phase), (unsigned)t.gL_mm,
            (unsigned)t.gR_mm, (int)t.diff_mm, (unsigned)t.rear_mm,
            (unsigned)t.rear_target_mm, (unsigned)t.align_diff_mm,
-           (unsigned)t.backoff_max, (unsigned)t.duty, (int)t.servo_deg,
-           (unsigned)t.cycles, (unsigned)t.backoffs, t.fault, liveKp.load(),
-           liveKi.load(), liveKd.load());
+           (unsigned)t.backoff_max, (unsigned)t.duty,
+           (unsigned)t.steer_settle_ms, (int)t.servo_deg, (unsigned)t.cycles,
+           (unsigned)t.backoffs, t.fault, liveKp.load(), liveKi.load(),
+           liveKd.load());
   socket.textAll(line);
 }
 
@@ -105,6 +108,11 @@ static void controlTask(void* arg) {
     const int16_t wanted_backoff = pendingBackoffMax.exchange(-1);
     if (wanted_backoff >= 0) {
       machine.setBackoffMax((uint8_t)wanted_backoff);
+    }
+
+    const int16_t wanted_steer = pendingSteerMs.exchange(-1);
+    if (wanted_steer >= 0) {
+      machine.setSteerSettleMs((uint16_t)wanted_steer);
     }
 
     const int16_t wanted_duty = pendingDuty.exchange(-1);
@@ -200,6 +208,9 @@ static void webTask(void* arg) {
     if (req->hasParam("backoff_max")) {
       pendingBackoffMax.store(
           (int16_t)req->getParam("backoff_max")->value().toInt());
+    }
+    if (req->hasParam("steer_ms")) {
+      pendingSteerMs.store((int16_t)req->getParam("steer_ms")->value().toInt());
     }
     if (req->hasParam("duty")) {
       pendingDuty.store((int16_t)req->getParam("duty")->value().toInt());

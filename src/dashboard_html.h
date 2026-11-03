@@ -38,8 +38,10 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(<!doctype html>
          margin-top: 12px; }
   input { flex: 1; min-width: 0; padding: 14px; font-size: 1rem; color: #e8e8e8;
           background: #1b1b1b; border: 1px solid #262626; border-radius: 10px; }
-  .lab { flex: 1 1 64px; min-width: 64px; }
-  .lab input { width: 100%; }
+  .lab { flex: 1 1 58px; min-width: 58px; }
+  .lab input { width: 100%; padding: 12px 8px; font-size: .95rem; }
+  /* Five limit fields plus the button do not share one phone line. */
+  #set-target { flex: 1 1 100%; }
   button { padding: 14px 16px; font-size: 1rem; border: 0; border-radius: 10px;
            background: #2d6cdf; color: #fff; }
   button:disabled { background: #2a2a2a; color: #6a6a6a; }
@@ -88,6 +90,8 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(<!doctype html>
     <input id="in-backoff" type="number" min="0" max="20" step="1" value="3"></label>
   <label class="lab"><span class="k">duty</span>
     <input id="in-duty" type="number" min="0" max="255" step="1" value="127"></label>
+  <label class="lab"><span class="k">steer ms</span>
+    <input id="in-steer" type="number" min="0" max="2000" step="50" value="600"></label>
   <button id="set-target">apply</button>
 </div>
 <div class="row">
@@ -121,7 +125,7 @@ const AXES = [
     lines: [{ key: 'servo', colour: '#bb9af7' }] }
 ];
 
-const BUSY = ['reverse', 'settle_rear', 'forward', 'settle_fwd'];
+const BUSY = ['reverse', 'settle_rear', 'steer', 'forward', 'settle_fwd'];
 
 let pts = [];
 let rearTarget = 90;
@@ -187,6 +191,7 @@ function show(d) {
     byId('in-align-diff').value = d.alignDiff;
     byId('in-backoff').value = d.backoffMax;
     byId('in-duty').value = d.duty;
+    byId('in-steer').value = d.steerMs;
     byId('in-kp').value = d.kp;
     byId('in-ki').value = d.ki;
     byId('in-kd').value = d.kd;
@@ -333,7 +338,7 @@ window.addEventListener('resize', draw);
 // retargeted without a reflash. Out-of-range values are clamped on the board.
 byId('set-target').addEventListener('click', () => {
   const q = [['rear_target_mm', 'in-rear-target'], ['align_diff_mm', 'in-align-diff'],
-    ['backoff_max', 'in-backoff'], ['duty', 'in-duty']]
+    ['backoff_max', 'in-backoff'], ['duty', 'in-duty'], ['steer_ms', 'in-steer']]
     .map(([k, id]) => {
       const v = Number(byId(id).value);
       return Number.isFinite(v) ? k + '=' + encodeURIComponent(v) : null;
