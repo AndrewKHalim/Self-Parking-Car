@@ -118,8 +118,10 @@ constexpr int STEER_SIGN = -1;
 namespace drive {
 constexpr uint32_t PWM_HZ = 20000;  // above hearing on a DRV8833
 constexpr uint8_t PWM_BITS = 8;
-constexpr uint8_t DUTY_REVERSE = 200;
-constexpr uint8_t DUTY_FORWARD = 200;
+// 127 of 255, half power. Bench report: 200 drove both legs too fast, which
+// costs travel the rear band has to absorb.
+constexpr uint8_t DUTY_REVERSE = 127;
+constexpr uint8_t DUTY_FORWARD = 127;
 }  // namespace drive
 
 namespace defaults {
