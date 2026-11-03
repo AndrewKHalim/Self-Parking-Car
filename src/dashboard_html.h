@@ -85,11 +85,11 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(<!doctype html>
   <label class="lab"><span class="k">target mm</span>
     <input id="in-rear-target" type="number" min="30" max="500" step="5" value="90"></label>
   <label class="lab"><span class="k">tol mm</span>
-    <input id="in-align-diff" type="number" min="1" max="200" step="1" value="10"></label>
+    <input id="in-align-diff" type="number" min="1" max="200" step="1" value="5"></label>
   <label class="lab"><span class="k">pulls</span>
     <input id="in-backoff" type="number" min="0" max="20" step="1" value="3"></label>
   <label class="lab"><span class="k">duty</span>
-    <input id="in-duty" type="number" min="0" max="255" step="1" value="127"></label>
+    <input id="in-duty" type="number" min="0" max="255" step="1" value="180"></label>
   <label class="lab"><span class="k">steer ms</span>
     <input id="in-steer" type="number" min="0" max="2000" step="50" value="600"></label>
   <button id="set-target">apply</button>

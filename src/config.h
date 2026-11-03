@@ -109,20 +109,18 @@ static_assert(SERVO_CENTRE_DEG + MAX_WHEEL_DEG * SERVO_PER_WHEEL_DEG <= SERVO_MA
 static_assert(SERVO_CENTRE_DEG - MAX_WHEEL_DEG * SERVO_PER_WHEEL_DEG >= SERVO_MIN_DEG,
               "MAX_WHEEL_DEG exceeds the servo travel");
 
-// Bench result: with +1 the wheels turned left while the car stood closer to
-// the right wall, so the linkage is mirrored against the servo's angle and the
-// correction has to be negated. Flip back to +1 only if the horn is remounted.
-constexpr int STEER_SIGN = -1;
+// Flipped twice on the bench: -1 was reported as steering the wrong way, so the
+// correction is negated again. This is the mapping that matches the linkage.
+constexpr int STEER_SIGN = 1;
 }  // namespace steering
 
 namespace drive {
 constexpr uint32_t PWM_HZ = 20000;  // above hearing on a DRV8833
 constexpr uint8_t PWM_BITS = 8;
-// Default duty for both legs. Bench report: 200 drove both legs too fast, so
-// the car covered more ground than the rear band can absorb; 127 is half power.
-// The WebUI can move this at runtime, which is also the knob to reach for when
-// a reverse leg runs out of its timeout.
-constexpr uint8_t DUTY = 127;
+// Default duty for both legs. Bench settled between 127 (too slow to finish a
+// reverse leg) and 200 (too fast for the rear band). Runtime-adjustable, which
+// is also the knob to reach for when a reverse leg runs out of its timeout.
+constexpr uint8_t DUTY = 180;
 constexpr uint8_t DUTY_MAX = 255;
 }  // namespace drive
 
@@ -131,7 +129,7 @@ constexpr uint16_t REAR_TARGET_MM = 90;  // 9 cm stop distance, WebUI-adjustable
 constexpr uint16_t REAR_TARGET_MIN_MM = 30;
 constexpr uint16_t REAR_TARGET_MAX_MM = 500;
 
-constexpr uint16_t ALIGN_DIFF_MM = 10;  // |gL - gR| that counts as aligned
+constexpr uint16_t ALIGN_DIFF_MM = 5;  // |gL - gR| that counts as aligned
 constexpr uint16_t ALIGN_DIFF_MIN_MM = 1;
 constexpr uint16_t ALIGN_DIFF_MAX_MM = 200;
 
