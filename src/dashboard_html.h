@@ -58,8 +58,10 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(<!doctype html>
   <div class="cell"><span class="k">diff</span><span class="v" id="v-diff">-</span></div>
   <div class="cell"><span class="k">rear</span><span class="v" id="v-rear">-</span></div>
   <div class="cell"><span class="k">rear target</span><span class="v" id="v-target">-</span></div>
+  <div class="cell"><span class="k">align tol</span><span class="v" id="v-align">-</span></div>
   <div class="cell"><span class="k">servo</span><span class="v" id="v-servo">-</span></div>
   <div class="cell"><span class="k">cycles</span><span class="v" id="v-cycles">-</span></div>
+  <div class="cell"><span class="k">pull-backs</span><span class="v" id="v-backoffs">-</span></div>
   <div class="cell"><span class="k">fault</span><span class="v" id="v-fault">-</span></div>
   <div class="cell"><span class="k">Kp</span><span class="v" id="v-kp">-</span></div>
   <div class="cell"><span class="k">Ki</span><span class="v" id="v-ki">-</span></div>
@@ -76,8 +78,13 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(<!doctype html>
 <canvas id="chart"></canvas>
 
 <div class="row">
-  <input id="in-rear-target" type="number" min="30" max="500" step="5" value="90">
-  <button id="set-target">set target (mm)</button>
+  <label class="lab"><span class="k">rear target mm</span>
+    <input id="in-rear-target" type="number" min="30" max="500" step="5" value="90"></label>
+  <label class="lab"><span class="k">align tol mm</span>
+    <input id="in-align-diff" type="number" min="1" max="200" step="1" value="10"></label>
+  <label class="lab"><span class="k">pull-backs</span>
+    <input id="in-backoff" type="number" min="0" max="20" step="1" value="3"></label>
+  <button id="set-target">apply</button>
 </div>
 <div class="row">
   <label class="lab"><span class="k">Kp</span>
@@ -157,8 +164,10 @@ function show(d) {
   byId('v-diff').textContent = mm(Math.abs(d.diff), 'none');
   byId('v-rear').textContent = mm(d.rear, 'far');
   byId('v-target').textContent = d.rearTarget + ' mm';
+  byId('v-align').textContent = d.alignDiff + ' mm';
   byId('v-servo').textContent = d.servo + '\u00b0';
   byId('v-cycles').textContent = d.cycles;
+  byId('v-backoffs').textContent = d.backoffs;
   byId('v-fault').textContent = d.fault;
   byId('v-kp').textContent = d.kp;
   byId('v-ki').textContent = d.ki;
@@ -170,6 +179,8 @@ function show(d) {
   rearTarget = d.rearTarget;
   if (!inputsSeeded) {
     byId('in-rear-target').value = rearTarget;
+    byId('in-align-diff').value = d.alignDiff;
+    byId('in-backoff').value = d.backoffMax;
     byId('in-kp').value = d.kp;
     byId('in-ki').value = d.ki;
     byId('in-kd').value = d.kd;
@@ -312,13 +323,17 @@ function draw() {
 
 window.addEventListener('resize', draw);
 
-// The target is read by the control task on its next tick, so it can be changed
-// between runs without a reflash. Out-of-range values are clamped on the board.
+// Both limits are read by the control task on its next tick, so a run can be
+// retargeted without a reflash. Out-of-range values are clamped on the board.
 byId('set-target').addEventListener('click', () => {
-  const v = Number(byId('in-rear-target').value);
-  if (!Number.isFinite(v)) return;
-  fetch('/config?rear_target_mm=' + encodeURIComponent(v), { method: 'POST' })
-    .catch(() => {});
+  const q = [['rear_target_mm', 'in-rear-target'], ['align_diff_mm', 'in-align-diff'],
+    ['backoff_max', 'in-backoff']]
+    .map(([k, id]) => {
+      const v = Number(byId(id).value);
+      return Number.isFinite(v) ? k + '=' + encodeURIComponent(v) : null;
+    }).filter(Boolean);
+  if (!q.length) return;
+  fetch('/config?' + q.join('&'), { method: 'POST' }).catch(() => {});
 });
 
 byId('set-gains').addEventListener('click', () => {

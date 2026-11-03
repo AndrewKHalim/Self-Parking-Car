@@ -48,9 +48,12 @@ struct Telemetry {
     int16_t diff_mm;
     uint16_t rear_mm;
     uint16_t rear_target_mm;
+    uint16_t align_diff_mm;
+    uint8_t backoff_max;
     int16_t servo_deg;
     float wheel_deg;
     uint16_t cycles;
+    uint8_t backoffs;
     Phase phase;
     const char* fault;
 };
@@ -63,6 +66,16 @@ public:
     void setRearTargetMm(uint16_t mm) {
         cfg_.rear_target_mm =
             (uint16_t)util::clampi(mm, defaults::REAR_TARGET_MIN_MM, defaults::REAR_TARGET_MAX_MM);
+    }
+
+    void setAlignDiffMm(uint16_t mm) {
+        cfg_.align_diff_mm =
+            (uint16_t)util::clampi(mm, defaults::ALIGN_DIFF_MIN_MM, defaults::ALIGN_DIFF_MAX_MM);
+    }
+
+    // Zero means no cap: the car keeps pulling forward until Stop.
+    void setBackoffMax(uint8_t count) {
+        cfg_.backoff_max = count > defaults::BACKOFF_MAX_MAX ? defaults::BACKOFF_MAX_MAX : count;
     }
 
     // A negative gain means "leave this one alone", so the page can send only
@@ -82,6 +95,7 @@ public:
     void start(uint32_t now_ms, const SensorReading& s, Actuators& act) {
         pid_.reset();
         cycles_ = 0;
+        backoffs_ = 0;
         last_pid_ms_ = 0;
         wheel_deg_ = 0.0f;
         fault_ = "none";
@@ -125,7 +139,7 @@ public:
             case Phase::REVERSE:
                 act.setServoDeg(steering::SERVO_CENTRE_DEG);
                 act.reverse(drive::DUTY_REVERSE);
-                if (s.rear_valid && s.rear_mm <= cfg_.rear_target_mm) {
+                if (s.rear_valid && atRearTarget(s.rear_mm)) {
                     act.brake();
                     phase_start_ms_ = now_ms;
                     phase_ = Phase::SETTLE_REAR;
@@ -146,7 +160,7 @@ public:
 
             case Phase::FORWARD_CORRECT:
                 act.forward(drive::DUTY_FORWARD);
-                if (elapsed >= cfg_.forward_move_ms) {
+                if (elapsed >= move_ms_) {
                     act.brake();
                     act.setServoDeg(steering::SERVO_CENTRE_DEG);
                     wheel_deg_ = 0.0f;
@@ -160,7 +174,7 @@ public:
                 act.setServoDeg(steering::SERVO_CENTRE_DEG);
                 if (elapsed >= cfg_.settle_ms) {
                     phase_start_ms_ = now_ms;
-                    if (s.rear_valid && s.rear_mm <= cfg_.rear_target_mm) {
+                    if (s.rear_valid && atRearTarget(s.rear_mm)) {
                         phase_ = Phase::SETTLE_REAR;
                     } else {
                         act.reverse(drive::DUTY_REVERSE);
@@ -174,6 +188,12 @@ public:
     }
 
 private:
+    // The band the tail is allowed: half the tolerance above the target. Braking
+    // at the top of it leaves room for the frame the brake costs.
+    bool atRearTarget(uint16_t rear_mm) const {
+        return rear_mm <= (uint16_t)(cfg_.rear_target_mm + defaults::REAR_TOLERANCE_MM);
+    }
+
     // Stationary sample: either we are aligned and done, or we turn the wheels
     // by the PID result and move forward.
     void settleRear(uint32_t now_ms, const SensorReading& s, Actuators& act) {
@@ -187,6 +207,28 @@ private:
         const int16_t diff = (int16_t)s.gL_mm - (int16_t)s.gR_mm;
         const int abs_diff = diff < 0 ? -diff : diff;
         if (abs_diff <= (int)cfg_.align_diff_mm) {
+            // Aligned, but if the tail stopped closer than the target band the
+            // run is not over: pull straight forward and come back at it. This
+            // is what recovers from a late brake.
+            const int rear_too_close =
+                (int)s.rear_mm + (int)defaults::REAR_TOLERANCE_MM < (int)cfg_.rear_target_mm;
+            if (s.rear_valid && rear_too_close) {
+                // A capped run stops here rather than pulling at the wall for
+                // ever: the gaps are aligned, the distance is what failed.
+                if (cfg_.backoff_max != 0 && backoffs_ >= cfg_.backoff_max) {
+                    act.brake();
+                    phase_ = Phase::FAULT;
+                    fault_ = "backoff_limit";
+                    return;
+                }
+                ++backoffs_;
+                act.setServoDeg(steering::SERVO_CENTRE_DEG);
+                act.forward(drive::DUTY_FORWARD);
+                move_ms_ = defaults::BACKOFF_MOVE_MS;
+                phase_start_ms_ = now_ms;
+                phase_ = Phase::FORWARD_CORRECT;
+                return;
+            }
             act.brake();
             act.setServoDeg(steering::SERVO_CENTRE_DEG);
             phase_ = Phase::PARKED;
@@ -204,6 +246,7 @@ private:
         ++cycles_;
 
         act.forward(drive::DUTY_FORWARD);
+        move_ms_ = cfg_.forward_move_ms;
         phase_start_ms_ = now_ms;
         phase_ = Phase::FORWARD_CORRECT;
     }
@@ -216,9 +259,12 @@ private:
         t.diff_mm = (int16_t)s.gL_mm - (int16_t)s.gR_mm;
         t.rear_mm = s.rear_mm;
         t.rear_target_mm = cfg_.rear_target_mm;
+        t.align_diff_mm = cfg_.align_diff_mm;
+        t.backoff_max = cfg_.backoff_max;
         t.servo_deg = (int16_t)act.servoDeg();
         t.wheel_deg = wheel_deg_;
         t.cycles = cycles_;
+        t.backoffs = (uint8_t)backoffs_;
         t.phase = phase_;
         t.fault = fault_;
         return t;
@@ -229,6 +275,8 @@ private:
     Phase phase_ = Phase::IDLE;
     uint32_t phase_start_ms_ = 0;
     uint32_t last_pid_ms_ = 0;
+    uint32_t move_ms_ = defaults::FORWARD_MOVE_MS;  // current forward leg
+    uint16_t backoffs_ = 0;
     float wheel_deg_ = 0.0f;
     uint16_t cycles_ = 0;
     const char* fault_ = "none";
