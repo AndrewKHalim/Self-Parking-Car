@@ -50,6 +50,10 @@ static std::atomic<float> pendingKp{-1.0f};
 static std::atomic<float> pendingKi{-1.0f};
 static std::atomic<float> pendingKd{-1.0f};
 
+// Same sentinel: a negative value means "leave it alone", so 0 stays legal.
+static std::atomic<float> pendingYawTolDeg{-1.0f};
+static std::atomic<float> pendingKYaw{-1.0f};
+
 // The gains the machine is actually running, so the page reports what is in
 // force rather than what the defaults happen to be.
 static std::atomic<float> liveKp{pid_defaults::KP};
@@ -69,15 +73,17 @@ static void publishTelemetry(const Telemetry& t) {
     return;
   }
 
-  static char line[288];
+  static char line[384];
   snprintf(line, sizeof(line),
            "{\"t\":%lu,\"state\":\"%s\",\"gL\":%u,\"gR\":%u,\"diff\":%d,"
+           "\"rawDiff\":%d,\"yaw\":%.1f,\"yawTol\":%.1f,\"kYaw\":%.2f,"
            "\"rear\":%u,\"rearTarget\":%u,\"alignDiff\":%u,\"backoffMax\":%u,"
            "\"duty\":%u,\"steerMs\":%u,\"servo\":%d,\"cycles\":%u,"
            "\"backoffs\":%u,\"fault\":\"%s\",\"kp\":%.2f,\"ki\":%.3f,"
            "\"kd\":%.2f}",
            (unsigned long)t.t_ms, phaseName(t.phase), (unsigned)t.gL_mm,
-           (unsigned)t.gR_mm, (int)t.diff_mm, (unsigned)t.rear_mm,
+           (unsigned)t.gR_mm, (int)t.diff_mm, (int)t.raw_diff_mm, t.yaw_deg,
+           t.yaw_tol_deg, t.k_yaw, (unsigned)t.rear_mm,
            (unsigned)t.rear_target_mm, (unsigned)t.align_diff_mm,
            (unsigned)t.backoff_max, (unsigned)t.duty,
            (unsigned)t.steer_settle_ms, (int)t.servo_deg, (unsigned)t.cycles,
@@ -130,6 +136,16 @@ static void controlTask(void* arg) {
       liveKd.store(machine.config().kd);
     }
 
+    const float wanted_yaw_tol = pendingYawTolDeg.exchange(-1.0f);
+    if (wanted_yaw_tol >= 0.0f) {
+      machine.setYawTolDeg(wanted_yaw_tol);
+    }
+
+    const float wanted_k_yaw = pendingKYaw.exchange(-1.0f);
+    if (wanted_k_yaw >= 0.0f) {
+      machine.setKYaw(wanted_k_yaw);
+    }
+
     const SensorReading reading = sensorBank.read();
     const uint32_t now = millis();
 
@@ -150,12 +166,12 @@ static void controlTask(void* arg) {
     // into the field names because a terminal capture has no caption.
     if (++tick % 3 == 0) {
       Serial.printf(
-          "t=%lu state=%s gL=%u gR=%u diff=%d rear=%u target=%u servo=%d "
-          "wheel=%.1f cycles=%u backoffs=%u fault=%s\n",
+          "t=%lu state=%s gL=%u gR=%u diff=%d rawDiff=%d yaw=%.1f rear=%u "
+          "target=%u servo=%d wheel=%.1f cycles=%u backoffs=%u fault=%s\n",
           (unsigned long)t.t_ms, phaseName(t.phase), (unsigned)t.gL_mm,
-          (unsigned)t.gR_mm, (int)t.diff_mm, (unsigned)t.rear_mm,
-          (unsigned)t.rear_target_mm, (int)t.servo_deg, t.wheel_deg,
-          (unsigned)t.cycles, (unsigned)t.backoffs, t.fault);
+          (unsigned)t.gR_mm, (int)t.diff_mm, (int)t.raw_diff_mm, t.yaw_deg,
+          (unsigned)t.rear_mm, (unsigned)t.rear_target_mm, (int)t.servo_deg,
+          t.wheel_deg, (unsigned)t.cycles, (unsigned)t.backoffs, t.fault);
     }
 
     vTaskDelayUntil(&last, pdMS_TO_TICKS(defaults::CONTROL_PERIOD_MS));
@@ -223,6 +239,12 @@ static void webTask(void* arg) {
     }
     if (req->hasParam("kd")) {
       pendingKd.store(req->getParam("kd")->value().toFloat());
+    }
+    if (req->hasParam("yaw_tol_deg")) {
+      pendingYawTolDeg.store(req->getParam("yaw_tol_deg")->value().toFloat());
+    }
+    if (req->hasParam("k_yaw")) {
+      pendingKYaw.store(req->getParam("k_yaw")->value().toFloat());
     }
     req->send(200, "application/json", "{\"config\":true}");
   };
