@@ -282,12 +282,13 @@ void setup() {
   actuators.begin();
 
   Serial.printf(
-      "target=%umm tol=%umm align=%umm settle=%ums forward=%ums backoff=%ums "
+      "target=%umm tol=%umm align=%umm settle=%ums forward=%ums backoff=%u..%ums "
       "backoff_max=%u duty=%u servo_per_wheel=%.2f max_wheel=%.1f kp=%.2f "
       "ki=%.3f kd=%.2f\n",
       (unsigned)defaults::REAR_TARGET_MM, (unsigned)defaults::REAR_TOLERANCE_MM,
       (unsigned)defaults::ALIGN_DIFF_MM, (unsigned)defaults::SETTLE_MS,
-      (unsigned)defaults::FORWARD_MOVE_MS, (unsigned)defaults::BACKOFF_MOVE_MS,
+      (unsigned)defaults::FORWARD_MOVE_MS, (unsigned)defaults::BACKOFF_MIN_MS,
+      (unsigned)defaults::BACKOFF_MAX_MS,
       (unsigned)defaults::BACKOFF_MAX, (unsigned)drive::DUTY,
       steering::SERVO_PER_WHEEL_DEG,
       steering::MAX_WHEEL_DEG, pid_defaults::KP, pid_defaults::KI,

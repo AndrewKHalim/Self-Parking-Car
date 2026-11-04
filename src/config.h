@@ -79,7 +79,10 @@ namespace chassis {
 constexpr float LENGTH_MM = 234.0f;
 constexpr float WHEELBASE_MM = 183.0f;
 constexpr float KINGPIN_SPACING_MM = 90.5f;
-constexpr float MAX_WIDTH_MM = 119.5f;
+constexpr float MAX_WIDTH_MM = 170.0f;       // 17 cm outer width across the tires
+constexpr float WHEEL_DIAMETER_MM = 67.0f;   // 6.7 cm tire
+constexpr float WHEEL_RADIUS_MM = 0.5f * WHEEL_DIAMETER_MM;
+constexpr float WHEEL_WIDTH_MM = 25.0f;      // 2.5 cm tire thickness
 
 // Side sensor faces, both aimed straight outboard. They are not at the same
 // station: the right one sits 80 mm further forward, so gL - gR carries a
@@ -88,15 +91,30 @@ constexpr float MAX_WIDTH_MM = 119.5f;
 constexpr float SIDE_SENSOR_SPAN_MM = 95.0f;
 constexpr float LEFT_AHEAD_AXLE_MM = 67.0f;
 constexpr float RIGHT_AHEAD_AXLE_MM = 147.0f;
-constexpr float REAR_BEHIND_AXLE_MM = 35.5f;
+constexpr float REAR_BEHIND_AXLE_MM = 38.0f;  // rear axle to rear sensor face
 
-// Geometric centre of the 234 mm body ahead of the rear axle: 234/2 - 35.5.
+// Geometric centre of the 234 mm body ahead of the rear axle: 234/2 - 38.
 constexpr float CENTRE_AHEAD_AXLE_MM = 0.5f * LENGTH_MM - REAR_BEHIND_AXLE_MM;
 // Sum of the longitudinal sensor offsets from that centre. The 80 mm stagger
-// leaves this at +51.0 mm, the coefficient that scales tan(psi) out of gL - gR.
+// leaves this at +56.0 mm, the coefficient that scales tan(psi) out of gL - gR.
 constexpr float STAGGER_COEFF_MM =
     (LEFT_AHEAD_AXLE_MM - CENTRE_AHEAD_AXLE_MM) +
     (RIGHT_AHEAD_AXLE_MM - CENTRE_AHEAD_AXLE_MM);
+
+// Each tire's outer sidewall protrudes (170 - 95) / 2 = 37.5 mm outboard of its
+// side sensor face, which is why a tire can touch a wall the gap sensor still
+// calls clear.
+constexpr float WHEEL_OUTBOARD_MM = 0.5f * (MAX_WIDTH_MM - SIDE_SENSOR_SPAN_MM);
+// Longitudinal lever arms from each side sensor to the tire edges the chassis
+// can hang on. The rear-most tire edge sits at z = -33.5 (behind the axle), the
+// front-most at z = 183 + 33.5 = 216.5, so the right sensor at z = 147 is only
+// 69.5 mm from the front edge but 180.5 mm from the rear one.
+constexpr float LEFT_REAR_TIRE_LEVER_MM = LEFT_AHEAD_AXLE_MM + WHEEL_RADIUS_MM;
+constexpr float RIGHT_REAR_TIRE_LEVER_MM = RIGHT_AHEAD_AXLE_MM + WHEEL_RADIUS_MM;
+constexpr float LEFT_FRONT_TIRE_LEVER_MM =
+    (WHEELBASE_MM + WHEEL_RADIUS_MM) - LEFT_AHEAD_AXLE_MM;
+constexpr float RIGHT_FRONT_TIRE_LEVER_MM =
+    (WHEELBASE_MM + WHEEL_RADIUS_MM) - RIGHT_AHEAD_AXLE_MM;
 }  // namespace chassis
 
 namespace steering {
@@ -155,9 +173,41 @@ constexpr uint32_t FORWARD_MOVE_MS = 1000;
 // Half of the 1 cm band the rear target is allowed. Stopping closer than this
 // is treated as an overshoot, not as parked.
 constexpr uint16_t REAR_TOLERANCE_MM = 5;
-// Straight pull-away when the tail ended up inside the tolerance. Fixed, not
-// the steering correction duration: it only has to open the gap.
-constexpr uint32_t BACKOFF_MOVE_MS = 500;
+// At duty 200 the car coasts 10-15 mm after the brake, so commanding the brake
+// this far above the stop band lands the settled chassis inside target +/- tol.
+constexpr uint16_t REVERSE_BRAKE_LEAD_MM = 10;
+// Straight pull-away when the tail ended up inside the tolerance: it only has to
+// undo the overshoot, and then it settles straight into SETTLE_REAR instead of
+// reversing at the wall again, which is what the old fixed 500 ms leg did.
+constexpr uint32_t BACKOFF_MIN_MS = 120;
+constexpr uint32_t BACKOFF_MAX_MS = 260;
+constexpr uint32_t BACKOFF_MS_PER_MM = 5;
+// A nudge that pulls further than this past the target did not work; reverse.
+constexpr uint16_t REAR_NUDGE_MAX_ABOVE_MM = 25;
+
+// Side-wall guard. The tire sidewalls stick 37.5 mm outboard of the gap
+// sensors, and at yaw the wheel furthest along the car reaches the wall long
+// before the sensor sees it, so the clearance is projected through tan(psi). A
+// 17.5 mm tire gap is a 55 mm sensor reading at psi = 0.
+constexpr float TIRE_MIN_CLEARANCE_MM = 17.5f;
+// A gap has to be shrinking by this much before it counts as closing; one noisy
+// pair must not brake the car.
+constexpr uint16_t SIDE_SHRINK_MARGIN_MM = 4;
+// Below this travel the heading estimate is noise, so only the latched angle
+// from the previous leg is used.
+constexpr uint32_t MIN_REVERSE_DRIVE_MS = 350;
+constexpr uint16_t LIVE_SLOPE_SPAN_MM = 15;
+// Above 12 deg, an S-curve (+lat then -lat) preserves the diagonal pose and
+// swings one end of the car into the wall; one unsplit straightening arc
+// rotates the chassis straight without translating it sideways.
+constexpr float LARGE_YAW_STRAIGHTEN_DEG = 12.0f;
+
+// Stall detector: a rear wheel hung on a wall leaves rear_mm almost unchanged
+// while the motors keep pushing. 8 mm over 700 ms is slower than any bench leg.
+constexpr uint16_t STALL_MIN_PROGRESS_MM = 8;
+constexpr uint32_t STALL_WINDOW_MS = 700;
+// A wheel that small cannot climb a wall unless it is turned hard enough.
+constexpr float UNSTICK_MIN_WHEEL_DEG = 9.5f;
 // How many straight pull-aways before the run gives up. 0 means keep pulling;
 // the WebUI can move this without a reflash.
 constexpr uint8_t BACKOFF_MAX = 3;

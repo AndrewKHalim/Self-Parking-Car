@@ -15,6 +15,11 @@
 // Nothing is computed while the car is moving, except the reverse-leg anchor
 // that the slope estimator needs. The rear sensor decides when to stop, the
 // side pair decides where to aim and how square the car is.
+//
+// Two things the bench forced into the reverse leg: the brake is commanded a
+// lead above the band (duty 200 coasts past it), and the side gaps can stop the
+// leg early through the tire clearance guard or the stall detector, because a
+// 170 mm track hangs a wheel on the wall before the gap sensor gets close.
 #pragma once
 
 #include <math.h>
@@ -58,7 +63,7 @@ struct Telemetry {
     uint32_t t_ms;
     uint16_t gL_mm;
     uint16_t gR_mm;
-    int16_t diff_mm;      // stagger-compensated offset: (gL - gR) - 51 * tan(psi)
+    int16_t diff_mm;      // stagger-compensated offset: (gL - gR) - 56 * tan(psi)
     int16_t raw_diff_mm;  // what the two sensors actually returned
     uint16_t rear_mm;
     uint16_t rear_target_mm;
@@ -141,6 +146,11 @@ public:
         yaw_deg_ = 0.0f;
         yaw_valid_ = false;
         corr_diff_mm_ = (int16_t)s.gL_mm - (int16_t)s.gR_mm;
+        early_reverse_stop_ = false;
+        stall_triggered_ = false;
+        backoff_nudge_active_ = false;
+        stall_anchor_valid_ = false;
+        unstick_count_ = 0;
         fault_ = "none";
         act.setServoDeg(steering::SERVO_CENTRE_DEG);
 
@@ -156,9 +166,7 @@ public:
             phase_ = Phase::SETTLE_REAR;
             return;
         }
-        recordReverseStart(s);
-        act.reverse(cfg_.duty);
-        phase_ = Phase::REVERSE;
+        beginReverseLeg(now_ms, s, act);
     }
 
     void stop(Actuators& act) {
@@ -169,6 +177,11 @@ public:
         second_leg_ms_ = 0;
         counter_wheel_deg_ = 0.0f;
         rev_start_valid_ = false;
+        early_reverse_stop_ = false;
+        stall_triggered_ = false;
+        backoff_nudge_active_ = false;
+        stall_anchor_valid_ = false;
+        unstick_count_ = 0;
         phase_ = Phase::IDLE;
         fault_ = "none";
     }
@@ -183,7 +196,7 @@ public:
                 act.brake();
                 break;
 
-            case Phase::REVERSE:
+            case Phase::REVERSE: {
                 act.setServoDeg(steering::SERVO_CENTRE_DEG);
                 act.reverse(cfg_.duty);
                 // Latch the anchor on the first tick where all three sensors
@@ -191,16 +204,108 @@ public:
                 if (!rev_start_valid_) {
                     recordReverseStart(s);
                 }
-                if (s.rear_valid && atRearTarget(s.rear_mm)) {
+                if (!stall_anchor_valid_ && s.rear_valid) {
+                    stall_check_ms_ = now_ms;
+                    stall_check_rear_mm_ = s.rear_mm;
+                    stall_anchor_valid_ = true;
+                }
+
+                // 1. Normal stop. The brake is commanded a brake-lead above the
+                // band because the chassis coasts 10-15 mm out of it at duty 200.
+                if (s.rear_valid && shouldStopReverse(s.rear_mm)) {
                     act.brake();
+                    early_reverse_stop_ = false;
+                    stall_triggered_ = false;
                     phase_start_ms_ = now_ms;
                     phase_ = Phase::SETTLE_REAR;
-                } else if (elapsed >= defaults::REVERSE_TIMEOUT_MS) {
+                    break;
+                }
+
+                // 2. Side-wall guard. The tire sidewalls are 37.5 mm outboard of
+                // the gap sensors, and at yaw the wheel furthest along the car
+                // reaches the wall before the sensor sees it, so clearance is
+                // projected through tan(psi) using each tire's lever arm.
+                if (elapsed >= defaults::MIN_REVERSE_DRIVE_MS && rev_start_valid_) {
+                    float live_tan_psi = yaw_valid_ ? tan_psi_ : 0.0f;
+                    if (s.rear_valid && s.left_valid && s.right_valid &&
+                        rev_start_rear_mm_ > s.rear_mm) {
+                        const int32_t d_rear =
+                            (int32_t)rev_start_rear_mm_ - (int32_t)s.rear_mm;
+                        if (d_rear >= (int32_t)defaults::LIVE_SLOPE_SPAN_MM) {
+                            const int16_t cur_diff = (int16_t)s.gL_mm - (int16_t)s.gR_mm;
+                            const float slope = (float)(rev_start_diff_mm_ - cur_diff) /
+                                                (2.0f * (float)d_rear);
+                            live_tan_psi =
+                                util::clampf(slope, -defaults::MAX_TAN_PSI,
+                                             defaults::MAX_TAN_PSI);
+                        }
+                    }
+                    const float left_yaw_proj =
+                        live_tan_psi >= 0.0f
+                            ? (chassis::LEFT_REAR_TIRE_LEVER_MM * live_tan_psi)
+                            : (chassis::LEFT_FRONT_TIRE_LEVER_MM * (-live_tan_psi));
+                    const float right_yaw_proj =
+                        live_tan_psi < 0.0f
+                            ? (chassis::RIGHT_REAR_TIRE_LEVER_MM * (-live_tan_psi))
+                            : (chassis::RIGHT_FRONT_TIRE_LEVER_MM * live_tan_psi);
+                    const float left_tire_clear =
+                        (float)s.gL_mm - chassis::WHEEL_OUTBOARD_MM - left_yaw_proj;
+                    const float right_tire_clear =
+                        (float)s.gR_mm - chassis::WHEEL_OUTBOARD_MM - right_yaw_proj;
+
+                    // Only a gap that is actually shrinking counts: one noisy
+                    // pair while driving straight must not brake the car.
+                    const bool left_closing =
+                        s.left_valid &&
+                        left_tire_clear <= defaults::TIRE_MIN_CLEARANCE_MM &&
+                        (int)s.gL_mm + (int)defaults::SIDE_SHRINK_MARGIN_MM <=
+                            (int)rev_start_gL_mm_;
+                    const bool right_closing =
+                        s.right_valid &&
+                        right_tire_clear <= defaults::TIRE_MIN_CLEARANCE_MM &&
+                        (int)s.gR_mm + (int)defaults::SIDE_SHRINK_MARGIN_MM <=
+                            (int)rev_start_gR_mm_;
+                    if (left_closing || right_closing) {
+                        act.brake();
+                        early_reverse_stop_ = true;
+                        stall_triggered_ = false;
+                        phase_start_ms_ = now_ms;
+                        phase_ = Phase::SETTLE_REAR;
+                        break;
+                    }
+                }
+
+                // 3. Stall detector: rear_mm standing still while the motors
+                // push means a wheel is hung on a wall. Waiting for the 6 s
+                // reverse timeout would just grind it against the wall.
+                if (stall_anchor_valid_ && s.rear_valid) {
+                    if ((int)stall_check_rear_mm_ - (int)s.rear_mm >=
+                        (int)defaults::STALL_MIN_PROGRESS_MM) {
+                        stall_check_ms_ = now_ms;
+                        stall_check_rear_mm_ = s.rear_mm;
+                    } else if (now_ms - stall_check_ms_ >= defaults::STALL_WINDOW_MS) {
+                        act.brake();
+                        if (cfg_.backoff_max != 0 &&
+                            ++unstick_count_ > (uint8_t)(cfg_.backoff_max * 2)) {
+                            phase_ = Phase::FAULT;
+                            fault_ = "rev_timeout";
+                            break;
+                        }
+                        early_reverse_stop_ = true;
+                        stall_triggered_ = true;
+                        phase_start_ms_ = now_ms;
+                        phase_ = Phase::SETTLE_REAR;
+                        break;
+                    }
+                }
+
+                if (elapsed >= defaults::REVERSE_TIMEOUT_MS) {
                     act.brake();
                     phase_ = Phase::FAULT;
                     fault_ = "rev_timeout";
                 }
                 break;
+            }
 
             case Phase::SETTLE_REAR:
                 act.brake();
@@ -236,7 +341,12 @@ public:
                         act.setServoDeg(steering::SERVO_CENTRE_DEG);
                         wheel_deg_ = 0.0f;
                         phase_start_ms_ = now_ms;
-                        phase_ = Phase::SETTLE_FORWARD;
+                        // The wheels stayed centred through an overshoot nudge,
+                        // so nothing about the heading or the offset changed:
+                        // settle and re-read rear_mm instead of reversing back
+                        // into the wall for another overshoot.
+                        phase_ = backoff_nudge_active_ ? Phase::SETTLE_REAR
+                                                       : Phase::SETTLE_FORWARD;
                     }
                 }
                 break;
@@ -270,9 +380,7 @@ public:
                     if (s.rear_valid && atRearTarget(s.rear_mm)) {
                         phase_ = Phase::SETTLE_REAR;
                     } else {
-                        recordReverseStart(s);
-                        act.reverse(cfg_.duty);
-                        phase_ = Phase::REVERSE;
+                        beginReverseLeg(now_ms, s, act);
                     }
                 }
                 break;
@@ -294,6 +402,13 @@ private:
         return rear_mm <= (uint16_t)(cfg_.rear_target_mm + defaults::REAR_TOLERANCE_MM);
     }
 
+    // Braking here, a lead above the band, is what makes the settled chassis
+    // land inside it: the brake is followed by 10-15 mm of coast at duty 200.
+    bool shouldStopReverse(uint16_t rear_mm) const {
+        return rear_mm <= (uint16_t)(cfg_.rear_target_mm + defaults::REAR_TOLERANCE_MM +
+                                     defaults::REVERSE_BRAKE_LEAD_MM);
+    }
+
     // Both side readings and the rear distance at the far end of a reverse leg.
     // The yaw estimate is the change between this anchor and the settled sample
     // at the stop, so a stale anchor is worse than none.
@@ -301,10 +416,27 @@ private:
         if (s.rear_valid && s.left_valid && s.right_valid) {
             rev_start_rear_mm_ = s.rear_mm;
             rev_start_diff_mm_ = (int16_t)s.gL_mm - (int16_t)s.gR_mm;
+            rev_start_gL_mm_ = s.gL_mm;
+            rev_start_gR_mm_ = s.gR_mm;
             rev_start_valid_ = true;
         } else {
             rev_start_valid_ = false;
         }
+    }
+
+    // One entry point for every reverse leg, so the per-leg anchors (slope and
+    // stall) are never carried over from the leg before it.
+    void beginReverseLeg(uint32_t now_ms, const SensorReading& s, Actuators& act) {
+        recordReverseStart(s);
+        stall_check_ms_ = now_ms;
+        stall_check_rear_mm_ = s.rear_mm;
+        stall_anchor_valid_ = s.rear_valid;
+        early_reverse_stop_ = false;
+        stall_triggered_ = false;
+        backoff_nudge_active_ = false;
+        phase_start_ms_ = now_ms;
+        act.reverse(cfg_.duty);
+        phase_ = Phase::REVERSE;
     }
 
     // Stationary sample: measure yaw and offset, then either declare the run
@@ -318,15 +450,29 @@ private:
             return;
         }
 
+        // Flags from the leg that just ended, captured before anything clears
+        // them: they decide how this stationary sample is read.
+        const bool was_nudge = backoff_nudge_active_;
+        const bool was_early = early_reverse_stop_;
+        const bool was_stall = stall_triggered_;
+        backoff_nudge_active_ = false;
+        early_reverse_stop_ = false;
+        stall_triggered_ = false;
+
         const int16_t raw_diff = (int16_t)s.gL_mm - (int16_t)s.gR_mm;
 
         // Reversing straight is a pure translation, so the only way (gL - gR)
         // can change over that leg is a heading error. Nose-right (psi > 0)
         // sends the tail rear-left: the car drifts toward the left wall and the
-        // difference shrinks, hence diff_start - diff_stop in the slope.
-        if (rev_start_valid_ && s.rear_valid && rev_start_rear_mm_ > s.rear_mm) {
+        // difference shrinks, hence diff_start - diff_stop in the slope. A nudge
+        // is not a reverse leg at all, and an early wall stop can be shorter
+        // than the noise span, so it gets the shorter span instead.
+        if (!was_nudge && rev_start_valid_ && s.rear_valid &&
+            rev_start_rear_mm_ > s.rear_mm) {
             const int32_t d_rear = (int32_t)rev_start_rear_mm_ - (int32_t)s.rear_mm;
-            if (d_rear >= (int32_t)defaults::MIN_REVERSE_SPAN_MM) {
+            const int32_t span = (int32_t)(was_early ? defaults::LIVE_SLOPE_SPAN_MM
+                                                     : defaults::MIN_REVERSE_SPAN_MM);
+            if (d_rear >= span) {
                 const float slope =
                     (float)(rev_start_diff_mm_ - raw_diff) / (2.0f * (float)d_rear);
                 tan_psi_ = util::clampf(slope, -defaults::MAX_TAN_PSI, defaults::MAX_TAN_PSI);
@@ -335,7 +481,7 @@ private:
             }
         }
 
-        // The forward sensor sees a wall that the rear one is 51 mm further
+        // The forward sensor sees a wall that the rear one is STAGGER_COEFF_MM
         // from, so part of the raw difference is heading, not offset.
         const float corr_f = yaw_valid_
                                  ? ((float)raw_diff - chassis::STAGGER_COEFF_MM * tan_psi_)
@@ -347,10 +493,21 @@ private:
         const float abs_yaw = yaw_deg_ < 0.0f ? -yaw_deg_ : yaw_deg_;
         const bool yaw_ok = !yaw_valid_ || (abs_yaw <= cfg_.yaw_tol_deg);
 
-        if (lat_ok && yaw_ok) {
+        // A nudge is a pure translation with the wheels centred: it only has to
+        // undo the overshoot. If it pulled further than target + 25 mm the leg
+        // has to run again, otherwise settle and park on what it achieved.
+        if (was_nudge && s.rear_valid &&
+            s.rear_mm >
+                (uint16_t)(cfg_.rear_target_mm + defaults::REAR_NUDGE_MAX_ABOVE_MM)) {
+            beginReverseLeg(now_ms, s, act);
+            return;
+        }
+
+        // An early stop (side wall or stall) never parked the car, so it must
+        // not be read as parked just because the gaps happen to look right.
+        if (lat_ok && yaw_ok && !was_early) {
             // Aligned, but if the tail stopped closer than the target band the
-            // run is not over: pull straight forward and come back at it. This
-            // is what recovers from a late brake.
+            // run is not over: pull straight forward and come back at it.
             const int rear_too_close =
                 (int)s.rear_mm + (int)defaults::REAR_TOLERANCE_MM < (int)cfg_.rear_target_mm;
             if (s.rear_valid && rear_too_close) {
@@ -363,12 +520,20 @@ private:
                     return;
                 }
                 ++backoffs_;
-                act.setServoDeg(steering::SERVO_CENTRE_DEG);
-                act.forward(cfg_.duty);
-                move_ms_ = defaults::BACKOFF_MOVE_MS;
+                // Proportional to the overshoot: a 5 mm overshoot does not need
+                // the same stroke as a 15 mm one, and every extra millimetre of
+                // the stroke is another millimetre to reverse back.
+                const int overshoot_mm = (int)cfg_.rear_target_mm - (int)s.rear_mm;
+                const int raw_ms = (int)defaults::BACKOFF_MIN_MS +
+                                   overshoot_mm * (int)defaults::BACKOFF_MS_PER_MM;
+                move_ms_ = (uint32_t)util::clampi(raw_ms, (int)defaults::BACKOFF_MIN_MS,
+                                                  (int)defaults::BACKOFF_MAX_MS);
                 second_leg_ms_ = 0;
                 counter_wheel_deg_ = 0.0f;
                 wheel_deg_ = 0.0f;
+                backoff_nudge_active_ = true;
+                act.setServoDeg(steering::SERVO_CENTRE_DEG);
+                act.forward(cfg_.duty);
                 phase_start_ms_ = now_ms;
                 phase_ = Phase::FORWARD_CORRECT;
                 return;
@@ -379,34 +544,64 @@ private:
             return;
         }
 
+        // Nose-right is corrected by steering left while driving forward, which
+        // is the positive-wheel-angle direction. The trim is split over the two
+        // halves so the S-curve's rotation adds up to the full correction.
+        const float yaw_wheel = yaw_valid_ ? (cfg_.k_yaw * yaw_deg_) : 0.0f;
+        const float only_yaw_w = util::clampf(yaw_wheel, -steering::MAX_WHEEL_DEG,
+                                              steering::MAX_WHEEL_DEG);
+
+        // Steep entry (20-30 deg): an S-curve's +lat then -lat preserves the
+        // diagonal pose and swings one end of the car into the wall, so run one
+        // unsplit arc instead. At psi = -25 deg that is a full 1000 ms at
+        // -15 deg, which pulls the rear tire off the right wall and rotates the
+        // car ~20 deg clockwise in the same stroke.
+        if (yaw_valid_ && abs_yaw >= defaults::LARGE_YAW_STRAIGHTEN_DEG) {
+            pid_.reset();
+            move_ms_ = cfg_.forward_move_ms;
+            second_leg_ms_ = 0;
+            wheel_deg_ = only_yaw_w;
+            counter_wheel_deg_ = 0.0f;
+            act.setWheelAngleDeg(wheel_deg_);
+            ++cycles_;
+            phase_start_ms_ = now_ms;
+            phase_ = Phase::STEER_WAIT;
+            return;
+        }
+
         // First sample of a cycle has no previous timestamp; the plan fixes that
-        // interval at one second so the integral term still moves.
+        // interval at one second so the integral term still moves. An early stop
+        // leaves the lateral PID as unsolved as a bad offset does, so it takes
+        // the same branch.
         float lat_wheel = 0.0f;
-        if (!lat_ok) {
+        if (!lat_ok || was_early) {
             const float dt_s =
                 (last_pid_ms_ == 0) ? 1.0f : (float)(now_ms - last_pid_ms_) * 0.001f;
             last_pid_ms_ = now_ms;
             lat_wheel = pid_.computeWheelDeg((float)corr_diff_mm_, dt_s, cfg_);
+
+            // A car that the wall stopped, or that stalled against it, cannot
+            // leave with the wheels near straight: enforce enough lock to climb
+            // away from the closer side.
+            if ((was_stall || was_early) &&
+                fabsf(lat_wheel) < defaults::UNSTICK_MIN_WHEEL_DEG) {
+                lat_wheel = (s.gL_mm <= s.gR_mm) ? -defaults::UNSTICK_MIN_WHEEL_DEG
+                                                 : defaults::UNSTICK_MIN_WHEEL_DEG;
+            }
         } else {
             // A heading-only fix is a rotation, not a translation: carrying the
             // old integral into it would leave a lateral bias behind.
             pid_.reset();
         }
 
-        // Nose-right is corrected by steering left while driving forward, which
-        // is the positive-wheel-angle direction. The trim is split over the two
-        // halves so the S-curve's rotation adds up to the full correction.
-        const float yaw_wheel = yaw_valid_ ? (cfg_.k_yaw * yaw_deg_) : 0.0f;
         const float first_w =
             util::clampf(+lat_wheel + 0.5f * yaw_wheel, -steering::MAX_WHEEL_DEG,
                          steering::MAX_WHEEL_DEG);
         const float second_w =
             util::clampf(-lat_wheel + 0.5f * yaw_wheel, -steering::MAX_WHEEL_DEG,
                          steering::MAX_WHEEL_DEG);
-        const float only_yaw_w = util::clampf(yaw_wheel, -steering::MAX_WHEEL_DEG,
-                                              steering::MAX_WHEEL_DEG);
 
-        if (!lat_ok) {
+        if (!lat_ok || was_early) {
             // Half the stroke each way: equal time at +d and -d cancels the
             // heading the first half adds, leaving only the sideways shift.
             move_ms_ = cfg_.forward_move_ms / 2;
@@ -465,7 +660,18 @@ private:
     // Reverse-leg anchor for the yaw slope.
     uint16_t rev_start_rear_mm_ = 0;
     int16_t rev_start_diff_mm_ = 0;
+    uint16_t rev_start_gL_mm_ = 0;
+    uint16_t rev_start_gR_mm_ = 0;
     bool rev_start_valid_ = false;
+    // Stall anchor: rear_mm at the last tick where it made real progress.
+    uint32_t stall_check_ms_ = 0;
+    uint16_t stall_check_rear_mm_ = 0;
+    bool stall_anchor_valid_ = false;
+    uint8_t unstick_count_ = 0;
+    // What the leg that just ended did, consumed once by settleRear.
+    bool early_reverse_stop_ = false;
+    bool stall_triggered_ = false;
+    bool backoff_nudge_active_ = false;
     float tan_psi_ = 0.0f;
     float yaw_deg_ = 0.0f;
     bool yaw_valid_ = false;
