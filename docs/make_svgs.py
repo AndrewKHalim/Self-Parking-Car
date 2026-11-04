@@ -208,14 +208,54 @@ def frame(x, y, w, h, fill=None):
             f'stroke-width="0.8"/>')
 
 
-def notes(x, y, lines, width=300):
-    """The figure's footnotes: a rule, then numbered roman sentences."""
-    out = [f'<line x1="{x}" y1="{y}" x2="{x + width}" y2="{y}" '
-           f'stroke="{PAL["ink20"]}" stroke-width="0.8"/>']
-    for i, line in enumerate(lines, 1):
-        out.append(text(x, y + 15 * i, f"{i}. {line}", size=LAB,
-                        fill=PAL["ink70"]))
-    return "".join(out)
+def est_width(body, size):
+    """Rough advance width for wrapping, calibrated against the renderer."""
+    wide = sum(1 for c in body if c.isupper() or c in "MWmw@%")
+    return (wide * 0.58 + (len(body) - wide) * 0.46) * size
+
+
+def wrap(body, size, room):
+    words, lines, line = body.split(), [], ""
+    for w in words:
+        trial = f"{line} {w}".strip()
+        if line and est_width(trial, size) > room:
+            lines.append(line)
+            line = w
+        else:
+            line = trial
+    if line:
+        lines.append(line)
+    return lines
+
+
+def notes(x, y, items, total=900, gap=28, size=LAB, lead=15):
+    """Footnotes in two or three columns, numbered across them.
+
+    Returns the markup and the y of the last line, so the canvas can be sized
+    from the content instead of a guess.
+    """
+    cols = 3 if len(items) >= 9 else (2 if len(items) >= 3 else 1)
+    colw = (total - gap * (cols - 1)) / cols
+    per_col = -(-len(items) // cols)
+    out, bottom = [], y
+    for c in range(cols):
+        cx = x + c * (colw + gap)
+        chunk = items[c * per_col:(c + 1) * per_col]
+        out.append(f'<line x1="{cx:.1f}" y1="{y}" x2="{cx + colw:.1f}" '
+                   f'y2="{y}" stroke="{PAL["ink20"]}" stroke-width="0.8"/>')
+        ly = y
+        for i, item in enumerate(chunk, 1 + c * per_col):
+            for j, piece in enumerate(wrap(item, size, colw - 18)):
+                if j == 0:
+                    out.append(text(cx, ly + lead, f"{i}. {piece}", size=size,
+                                    fill=PAL["ink70"]))
+                else:
+                    out.append(text(cx + 11, ly + lead, piece, size=size,
+                                    fill=PAL["ink70"]))
+                ly += lead
+            ly += 2
+        bottom = max(bottom, ly)
+    return "".join(out), bottom
 
 
 def svg(width, height, body):
@@ -271,12 +311,15 @@ def flow_webui():
     s.append(elbow([anchor_of("delay", "right"), (966, 544), (966, 74),
                     (800, 74), anchor_of("exchange", "top")], "30 Hz",
                    (912, 508)))
-    s.append(notes(40, 600, [
+    body, bottom = notes(40, 600, [
         "handlers only store a flag; the control task applies it next tick",
         "the slot carries a copy, never a half-written state",
         "stop is applied before start, so an abort is never swallowed",
-    ], width=380))
-    return s, 980, 700
+        "33 ms is the control period at 30 Hz; the page is fed every 100 ms, 10 Hz",
+        "the car is its own access point, so the page needs no router and no credentials",
+    ])
+    s.append(body)
+    return s, 980, int(bottom) + 24
 
 
 # --------------------------------------------------------------------------
@@ -318,7 +361,7 @@ def flow_parking():
          line=PAL["ok_line"])
     dec("close", 800, 824, 240, 84, "rear < target − tol?")
     dec("capq", 800, 942, 220, 84, "backoffs < cap?")
-    proc("nudge", 700, 1010, 200, 58, "nudge 120–260 ms",
+    proc("nudge", 700, 1010, 200, 58, "nudge 120 to 260 ms",
          "straight, centred")
     proc("fault2", 700, 1110, 210, 46, "backoff_limit", "FAULT",
          PAL["err_fill"], PAL["err_line"])
@@ -374,15 +417,23 @@ def flow_parking():
     s.append(arrow("band", "B9", "right", "left", "yes", dy=-8))
     s.append(arrow("band", "A9", "left", "right", "no", dy=-8))
 
-    s.append(notes(40, 1450, [
+    body, bottom = notes(40, 1450, [
         "A and B are jump labels: the same letter joins the two ends",
-        "the dot where two wires join is an OR: either one continues",
-        "an early stop never parks: right gaps, wrong distance",
-        "a nudge that pulls past target + 25 mm re-enters REVERSE",
-        "the cap is a hard stop: backoff_limit faults out instead of nudging",
+        "the dot where two wires join is an OR: either stroke continues",
+        "target is rear_target_mm, 100 mm by default, and tol is REAR_TOLERANCE_MM, 5 mm",
+        "an early stop never parks: the gaps can look right while the car is short of target",
+        "the nudge is 120 ms plus 5 ms for each mm of overshoot, capped at 260 ms",
+        "half stroke, yaw trim: half of a stroke at Kyaw times psi, with no counter half",
+        "the counter half is left out because the offset is already inside the tolerance",
+        "two halves there would move the car sideways when only the heading is wrong",
+        "12 deg is LARGE_YAW_STRAIGHTEN_DEG: above it an S-curve keeps the diagonal pose",
+        "that pose swings a wheel into a wall, so one full stroke steers the car straight",
+        "cap is backoff_max, 3 by default, and 0 means keep pulling until stop",
+        "the four fault words are the strings the page shows: rear_sensor, side_sensor, rev_timeout, backoff_limit",
         "the strokes themselves are in scurve.svg",
-    ], width=520))
-    return s, 980, 1560
+    ])
+    s.append(body)
+    return s, 980, int(bottom) + 24
 
 
 # --------------------------------------------------------------------------
@@ -431,13 +482,22 @@ def flow_guard():
                     anchor_of("stalled", "left")], "no", (186, 560)))
     s.append(elbow([anchor_of("next", "left"), (60, 988), (60, 86),
                     anchor_of("tick", "left")], "next tick", (66, 520)))
-    s.append(notes(40, 1024, [
-        "the lead check is first: the brake has to beat the 10-15 mm coast",
-        "the side guard is skipped until the car has driven 15 mm",
-        "17.5 mm at the tire is 55 mm at the sensor when psi is 0",
-        "under 8 mm of travel in 700 ms means a wheel is hung on a wall",
-    ], width=460))
-    return s, 980, 1100
+    body, bottom = notes(40, 1040, [
+        "33 ms is the control period: the whole list runs once per tick, at 30 Hz",
+        "target + 15 mm is the 100 mm target, 5 mm of tolerance and 10 mm of brake lead",
+        "the lead exists because the car coasts another 10 to 15 mm after the brake",
+        "350 ms and 15 mm keep the side guard quiet until the gaps have moved enough to read",
+        "37.5 mm is how far each tire sidewall sits outboard of its gap sensor: (170 - 95) / 2",
+        "the lever arms are 100.5 and 180.5 mm to the rear tire edges, 149.5 and 69.5 to the front",
+        "those arms are why a yawed car touches a wall that its own sensor still calls clear",
+        "17.5 mm is the clearance we brake at, which reads as a 55 mm gap while the car is square",
+        "8 mm in 700 ms is the stall bar: less progress than that means a wheel is on a wall",
+        "9.5 deg is the least lock that lets a wheel climb away from the wall",
+        "2 x backoff_max caps the unstick attempts before rev_timeout",
+        "6000 ms is the reverse timeout, the last resort before a fault",
+    ])
+    s.append(body)
+    return s, 980, int(bottom) + 24
 
 
 # --------------------------------------------------------------------------
@@ -485,14 +545,22 @@ def block_pid():
                     (245, AX + 34), (245, AX + 20)]))
     s.append(text(150, AX + 28, "y", size=LAB, fill=PAL["ink70"]))
 
-    s.append(notes(40, 300, [
-        "the set point is 0 mm: the tail belongs centred between the gaps",
+    body, bottom = notes(40, 300, [
+        "the set point is 0 mm because the tail belongs centred between the gaps",
         "e is 0 minus y, and y is the offset the sensors report after the move",
-        "the block runs once per cycle, on a settled and braked chassis",
-        "gains: Kp 0.15 deg/mm, Ki 0.01 with the integral capped at 5 deg",
-        "the servo angle is applied for 500 ms, then gL and gR are read again",
-    ], width=600))
-    return s, 980, 420
+        "the block runs once per cycle, on a braked chassis, never while it rolls",
+        "Kp 0.15 deg per mm, Ki 0.01 per mm-second, Kd 0.02 per mm/s, all set from the page",
+        "15.4 deg is the mechanical stop of the road wheel, so the sum clamps there",
+        "the integral is capped at 5 deg of wheel, which keeps it from winding up while stuck",
+        "2.92 is servo degrees per wheel degree: pinion, rack pitch and horn multiply it",
+        "90 is the centred servo, so servo = 90 + 2.92 x wheel, and the travel is 45 to 135",
+        "56 mm is the stagger coefficient: the side sensors sit 80 mm apart along the body",
+        "that 80 mm means gL minus gR carries heading as well, and 56 removes that term",
+        "500 ms is half of the 1000 ms forward stroke, the time the angle is held",
+        "33 ms is the control period, 30 Hz, and the gaps are read on that tick",
+    ])
+    s.append(body)
+    return s, 980, int(bottom) + 24
 
 
 # --------------------------------------------------------------------------
@@ -594,13 +662,22 @@ def scurve():
     proc("trim", 720, 404, 240, 58, "yaw trim only", "wheel = Kyaw · yaw")
     proc("arc", 470, 486, 230, 58, "yaw ≥ 12 deg", "one arc, no mirror",
          PAL["dec_fill"], PAL["dec_line"])
-    s.append(notes(40, 580, [
-        "the first half steers toward the gap; the second mirrors it",
-        "equal lock for equal time cancels the rotation: heading out = in",
-        "the offset does not cancel, both halves push the tail the same way",
-        "above 12 deg of yaw the S-curve is replaced by one straightening arc",
-    ], width=460))
-    return s, 980, 660
+    body, bottom = notes(40, 580, [
+        "STEER_WAIT is 300 ms with the motors braked, so the servo arrives before the car moves",
+        "FORWARD_CORRECT is 500 ms at +d, half of forward_move_ms",
+        "STEER_COUNTER is the same 300 ms while the servo swings to -d",
+        "FORWARD_COUNTER is the other 500 ms at -d",
+        "SETTLE is SETTLE_FORWARD: 300 ms braked while the servo recentres",
+        "d is the wheel angle the PID asks for, which the servo maps to 90 + 2.92 x d",
+        "theta is the heading change that angle causes, and it returns to zero",
+        "delta is the lateral shift, the integral of that heading over the same time",
+        "equal lock for equal time cancels the rotation, so heading out equals heading in",
+        "the offset does not cancel: both halves push the tail the same way",
+        "above 12 deg of yaw one straightening arc replaces the two halves",
+        "the whole cycle is 1900 ms: 300 + 500 + 300 + 500 + 300",
+    ])
+    s.append(body)
+    return s, 980, int(bottom) + 24
 
 
 def main():
