@@ -30,8 +30,12 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(<!doctype html>
   .v { display: block; font-size: 1.25rem; font-variant-numeric: tabular-nums; }
   canvas { display: block; width: 100%; height: 300px; background: #1b1b1b;
            border: 1px solid #262626; border-radius: 8px; }
-  .legend { display: flex; gap: 18px; margin: 8px 0; font-size: .8rem;
-            color: #9a9a9a; }
+  /* Map beside the traces on a tablet or laptop, stacked on a phone. */
+  .viz { display: grid; grid-template-columns: minmax(260px, 360px) 1fr;
+         gap: 12px; align-items: start; margin-bottom: 4px; }
+  @media (max-width: 720px) { .viz { grid-template-columns: 1fr; } }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 18px; margin: 8px 0;
+            font-size: .8rem; color: #9a9a9a; }
   .legend i { display: inline-block; width: 10px; height: 10px; margin-right: 6px;
               border-radius: 2px; }
   .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch;
@@ -74,14 +78,27 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(<!doctype html>
   <div class="cell"><span class="k">Kd</span><span class="v" id="v-kd">-</span></div>
 </div>
 
-<div class="legend">
-  <span><i style="background:#5fd38b"></i>gL</span>
-  <span><i style="background:#7aa2f7"></i>gR</span>
-  <span><i style="background:#e0af68"></i>rear</span>
-  <span><i style="background:#e0af68;opacity:.5"></i>target</span>
-  <span><i style="background:#bb9af7"></i>servo</span>
+<div class="viz">
+  <div>
+    <div class="legend">
+      <span><i style="background:#2d6cdf"></i>car 170×234 mm</span>
+      <span><i style="background:#5fd38b"></i>gL</span>
+      <span><i style="background:#7aa2f7"></i>gR</span>
+      <span><i style="background:#e0af68"></i>rear / target</span>
+    </div>
+    <canvas id="map"></canvas>
+  </div>
+  <div>
+    <div class="legend">
+      <span><i style="background:#5fd38b"></i>gL</span>
+      <span><i style="background:#7aa2f7"></i>gR</span>
+      <span><i style="background:#e0af68"></i>rear</span>
+      <span><i style="background:#e0af68;opacity:.5"></i>target</span>
+      <span><i style="background:#bb9af7"></i>servo</span>
+    </div>
+    <canvas id="chart"></canvas>
+  </div>
 </div>
-<canvas id="chart"></canvas>
 
 <div class="row">
   <label class="lab"><span class="k">target mm</span>
@@ -120,6 +137,22 @@ const OUT_OF_RANGE_MM = 8000;
 const MAX_POINTS = 600;
 const T_SPAN_MS = 20000;
 
+// Body and sensor stations from config.h (chassis namespace), expressed from
+// the geometric centre of the body: +z forward, +x right, both in millimetres.
+const CAR_W_MM = 170;            // MAX_WIDTH_MM, outer width across the tires
+const CAR_L_MM = 234;            // LENGTH_MM
+const HALF_W_MM = CAR_W_MM / 2;
+const HALF_L_MM = CAR_L_MM / 2;
+const SENSOR_SPAN_HALF_MM = 47.5; // SIDE_SENSOR_SPAN_MM / 2
+const LEFT_Z_MM = -12;           // 67 mm ahead of the axle - 79 mm centre offset
+const RIGHT_Z_MM = 68;           // 147 mm ahead of the axle - 79 mm centre offset
+const REAR_Z_MM = -HALF_L_MM;    // rear bumper face
+const STAGGER_MM = 56;           // LEFT_Z_MM + RIGHT_Z_MM, the firmware's stagger
+const NOMINAL_REAR_MM = 250;     // drawn when the rear sensor has no target
+const BAY_MIN_W_MM = 520;        // narrowest bay the map shows before zooming out
+const BAY_MIN_DEPTH_MM = 520;
+const FONT = '10px -apple-system, "Segoe UI", Roboto, sans-serif';
+
 // One band per quantity, fixed ranges so two runs can be compared by eye. The
 // two gaps share a band because their convergence is the thing being watched.
 const AXES = [
@@ -137,12 +170,15 @@ const BUSY = ['reverse', 'settle_rear', 'steer', 'forward', 'steer_counter',
 let pts = [];
 let rearTarget = 100;
 let inputsSeeded = false;
+let latest = null;
 
 const byId = (id) => document.getElementById(id);
 const link = byId('link');
 const startButton = byId('start');
 const canvas = byId('chart');
 const ctx = canvas.getContext('2d');
+const mapCanvas = byId('map');
+const mapCtx = mapCanvas.getContext('2d');
 let retry = 0;
 
 // The websocket stays up on its own: the car is an access point that may reboot
@@ -218,25 +254,27 @@ function show(d) {
     servo: d.servo
   });
   if (pts.length > MAX_POINTS) pts.shift();
+  latest = d;
   draw();
+  drawMap();
 }
 
 // Match the backing store to the CSS size and the screen density, so the lines
 // stay sharp on a phone without layout maths elsewhere.
-function fit() {
+function fit(el, g) {
   const ratio = Math.min(2, window.devicePixelRatio || 1);
-  const w = canvas.clientWidth;
-  const h = canvas.clientHeight;
-  if (canvas.width !== Math.round(w * ratio) || canvas.height !== Math.round(h * ratio)) {
-    canvas.width = Math.round(w * ratio);
-    canvas.height = Math.round(h * ratio);
+  const w = el.clientWidth;
+  const h = el.clientHeight;
+  if (el.width !== Math.round(w * ratio) || el.height !== Math.round(h * ratio)) {
+    el.width = Math.round(w * ratio);
+    el.height = Math.round(h * ratio);
   }
-  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  g.setTransform(ratio, 0, 0, ratio, 0, 0);
   return [w, h];
 }
 
 function draw() {
-  const [w, h] = fit();
+  const [w, h] = fit(canvas, ctx);
   ctx.clearRect(0, 0, w, h);
 
   const left = 42;
@@ -343,7 +381,216 @@ function draw() {
   });
 }
 
-window.addEventListener('resize', draw);
+// The bay, not the car, is the fixed frame: +X right, +Z forward, origin at the
+// middle of the rear wall. Walls are placed where the sensor rays put them, so
+// in a validated frame each ray ends exactly on its own wall.
+function drawMap() {
+  const [w, h] = fit(mapCanvas, mapCtx);
+  const g = mapCtx;
+  g.clearRect(0, 0, w, h);
+
+  const d = latest;
+  const psi = ((d ? d.yaw : 0) * Math.PI) / 180;
+  const c = Math.cos(psi);
+  const s = Math.sin(psi);
+  const hasLeft = !!d && d.gL < OUT_OF_RANGE_MM;
+  const hasRight = !!d && d.gR < OUT_OF_RANGE_MM;
+  const hasRear = !!d && d.rear < OUT_OF_RANGE_MM;
+  const gL = hasLeft ? d.gL : 0;
+  const gR = hasRight ? d.gR : 0;
+  const rearMm = hasRear ? d.rear : NOMINAL_REAR_MM;
+
+  // The rear ray has to land on Z = 0, so the centre sits (rear + L/2) cos away
+  // from the wall. cos is floored so a car nearly parallel to the wall cannot
+  // collapse the frame.
+  const Zc = (rearMm + HALF_L_MM) * Math.max(0.35, c);
+
+  // Two walls fix the lateral offset. The stagger term is the firmware's own, so
+  // the map and the controller agree about which way is straight.
+  let Xc = 0;
+  let wallL = null;
+  let wallR = null;
+  if (hasLeft && hasRight) Xc = ((gL - gR) * c - STAGGER_MM * s) / 2;
+  if (hasLeft) wallL = Xc - (SENSOR_SPAN_HALF_MM + gL) * c - LEFT_Z_MM * s;
+  if (hasRight) wallR = Xc + (SENSOR_SPAN_HALF_MM + gR) * c + RIGHT_Z_MM * s;
+
+  const carPt = (xc, zc) => [Xc + xc * c + zc * s, Zc - xc * s + zc * c];
+  const corners = [carPt(-HALF_W_MM, REAR_Z_MM), carPt(HALF_W_MM, REAR_Z_MM),
+                   carPt(HALF_W_MM, HALF_L_MM), carPt(-HALF_W_MM, HALF_L_MM)];
+
+  // One millimetre gets one scale on both axes, so the 170x234 body never skews.
+  const xs = [-BAY_MIN_W_MM / 2, BAY_MIN_W_MM / 2];
+  const zs = [-30, Math.max(BAY_MIN_DEPTH_MM, Zc + 160)];
+  for (const p of corners) { xs.push(p[0]); zs.push(p[1]); }
+  if (wallL !== null) xs.push(wallL);
+  if (wallR !== null) xs.push(wallR);
+  const xMin = Math.min(...xs);
+  const xMax = Math.max(...xs);
+  const zMin = Math.min(...zs);
+  const zMax = Math.max(...zs);
+  const pad = 14;
+  const scale = Math.min((w - 2 * pad) / (xMax - xMin), (h - 2 * pad) / (zMax - zMin));
+  const ox = (w - (xMax - xMin) * scale) / 2;
+  const oy = (h - (zMax - zMin) * scale) / 2;
+  const mx = (v) => ox + (v - xMin) * scale;
+  const my = (v) => oy + (zMax - v) * scale;
+
+  g.lineWidth = 1;
+  g.strokeStyle = '#222';
+  g.beginPath();
+  for (let v = Math.ceil(xMin / 100) * 100; v <= xMax; v += 100) {
+    g.moveTo(mx(v), my(zMin));
+    g.lineTo(mx(v), my(zMax));
+  }
+  for (let v = Math.ceil(zMin / 100) * 100; v <= zMax; v += 100) {
+    g.moveTo(mx(xMin), my(v));
+    g.lineTo(mx(xMax), my(v));
+  }
+  g.stroke();
+
+  // The line the car is trying to sit on.
+  g.save();
+  g.setLineDash([5, 5]);
+  g.strokeStyle = '#2c2c2c';
+  g.beginPath();
+  g.moveTo(mx(0), my(zMax));
+  g.lineTo(mx(0), my(zMin));
+  g.stroke();
+  g.restore();
+
+  // Rear wall, then the stop distance it is aiming for.
+  g.strokeStyle = '#e0af68';
+  g.lineWidth = 2.5;
+  g.beginPath();
+  g.moveTo(mx(xMin), my(0));
+  g.lineTo(mx(xMax), my(0));
+  g.stroke();
+  if (d) {
+    const ty = my(d.rearTarget);
+    g.save();
+    g.setLineDash([4, 4]);
+    g.lineWidth = 1.5;
+    g.beginPath();
+    g.moveTo(mx(xMin), ty);
+    g.lineTo(mx(xMax), ty);
+    g.stroke();
+    g.restore();
+    g.fillStyle = '#e0af68';
+    g.font = FONT;
+    g.textAlign = 'right';
+    g.textBaseline = 'bottom';
+    g.fillText('target ' + d.rearTarget + ' mm', mx(xMax) - 2, ty - 2);
+  }
+
+  g.lineWidth = 2.5;
+  if (wallL !== null) {
+    g.strokeStyle = '#5fd38b';
+    g.beginPath();
+    g.moveTo(mx(wallL), my(0));
+    g.lineTo(mx(wallL), my(zMax));
+    g.stroke();
+  }
+  if (wallR !== null) {
+    g.strokeStyle = '#7aa2f7';
+    g.beginPath();
+    g.moveTo(mx(wallR), my(0));
+    g.lineTo(mx(wallR), my(zMax));
+    g.stroke();
+  }
+
+  const tracePoly = (list) => {
+    g.beginPath();
+    list.forEach((p, i) => (i ? g.lineTo(mx(p[0]), my(p[1]))
+                              : g.moveTo(mx(p[0]), my(p[1]))));
+    g.closePath();
+  };
+
+  tracePoly(corners);
+  g.fillStyle = 'rgba(45, 108, 223, 0.18)';
+  g.fill();
+  g.strokeStyle = '#2d6cdf';
+  g.lineWidth = 2;
+  g.stroke();
+
+  // The 95 mm sensor span sits 37.5 mm inboard of each tire, which is the gap the
+  // sensors cannot see.
+  tracePoly([carPt(-SENSOR_SPAN_HALF_MM, REAR_Z_MM), carPt(SENSOR_SPAN_HALF_MM, REAR_Z_MM),
+             carPt(SENSOR_SPAN_HALF_MM, HALF_L_MM), carPt(-SENSOR_SPAN_HALF_MM, HALF_L_MM)]);
+  g.save();
+  g.setLineDash([3, 3]);
+  g.lineWidth = 1;
+  g.strokeStyle = 'rgba(232, 232, 232, 0.25)';
+  g.stroke();
+  g.restore();
+
+  // Nose to tail, so front and back are never in doubt.
+  const tailPt = carPt(0, -30);
+  const nosePt = carPt(0, 90);
+  const tx = mx(tailPt[0]);
+  const ty2 = my(tailPt[1]);
+  const nx = mx(nosePt[0]);
+  const ny = my(nosePt[1]);
+  const dl = Math.hypot(nx - tx, ny - ty2) || 1;
+  const ux = (nx - tx) / dl;
+  const uy = (ny - ty2) / dl;
+  g.strokeStyle = '#2d6cdf';
+  g.lineWidth = 1.5;
+  g.beginPath();
+  g.moveTo(tx, ty2);
+  g.lineTo(nx, ny);
+  g.stroke();
+  g.fillStyle = '#2d6cdf';
+  g.beginPath();
+  g.moveTo(nx, ny);
+  g.lineTo(nx - ux * 8 - uy * 4, ny - uy * 8 + ux * 4);
+  g.lineTo(nx - ux * 8 + uy * 4, ny - uy * 8 - ux * 4);
+  g.closePath();
+  g.fill();
+
+  const ray = (mount, dir, len, colour, label, toLeft) => {
+    const [fx, fz] = carPt(mount[0], mount[1]);
+    const hx = fx + dir[0] * len;
+    const hz = fz + dir[1] * len;
+    g.save();
+    g.setLineDash([4, 4]);
+    g.strokeStyle = colour;
+    g.lineWidth = 1.5;
+    g.beginPath();
+    g.moveTo(mx(fx), my(fz));
+    g.lineTo(mx(hx), my(hz));
+    g.stroke();
+    g.restore();
+    g.fillStyle = colour;
+    for (const p of [[fx, fz], [hx, hz]]) {
+      g.beginPath();
+      g.arc(mx(p[0]), my(p[1]), 3.5, 0, Math.PI * 2);
+      g.fill();
+    }
+    // The rear ray meets the target line, so its label goes on the far side of
+    // the ray instead of on top of that caption.
+    g.font = FONT;
+    g.textAlign = toLeft ? 'right' : 'left';
+    g.textBaseline = 'middle';
+    const ax = mx((fx + hx) / 2) + (toLeft ? -6 : 6);
+    g.fillText(label, ax, my((fz + hz) / 2) - 6);
+  };
+
+  if (hasLeft) ray([-SENSOR_SPAN_HALF_MM, LEFT_Z_MM], [-c, s], gL, '#5fd38b', gL + ' mm');
+  if (hasRight) ray([SENSOR_SPAN_HALF_MM, RIGHT_Z_MM], [c, -s], gR, '#7aa2f7', gR + ' mm');
+  if (hasRear) ray([0, REAR_Z_MM], [-s, -c], rearMm, '#e0af68', rearMm + ' mm', true);
+
+  g.font = FONT;
+  g.textAlign = 'left';
+  g.textBaseline = 'top';
+  g.fillStyle = '#9a9a9a';
+  g.fillText(d ? 'yaw ' + d.yaw.toFixed(1) + '\u00b0  diff ' +
+    (d.diff >= OUT_OF_RANGE_MM ? 'none' : d.diff + ' mm') : 'no telemetry', 6, 6);
+}
+
+window.addEventListener('resize', () => {
+  draw();
+  drawMap();
+});
 
 // Both limits are read by the control task on its next tick, so a run can be
 // retargeted without a reflash. Out-of-range values are clamped on the board.
@@ -384,6 +631,7 @@ byId('stop').addEventListener('click', () => {
 
 connect();
 draw();
+drawMap();
 </script>
 </body>
 </html>

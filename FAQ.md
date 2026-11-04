@@ -52,22 +52,55 @@ the car short of the target, which then reads as an overshoot on the other side.
 
 ### How is the yaw angle psi computed?
 
-From the change in the gap difference over the reverse leg that just ended:
+Every reverse leg is driven with the wheels straight, so the body only
+translates. That is what makes the measurement possible: while the car moves
+straight back, whatever the two side gaps do is caused by the angle the car sits
+at, not by steering.
+
+Take the car yawed 10 degrees, nose to the right, reversing 120 mm. Its two side
+sensors ride along the walls at that angle, so each gap changes by
+`120 * tan(10 deg) = 120 * 0.176 = 21.2 mm` — the left gap shrinks as the tail
+walks toward the left wall, the right gap grows by the same amount. The tangent,
+not the sine, is the right factor: the reading is taken along a ray that is
+oblique to the wall by psi, so the perpendicular movement of 120 mm is divided
+by `cos(psi)` first.
+
+The two gaps move in opposite directions, so the difference moves twice as fast
+as either gap:
 
 ```
 tan(psi) = (diff_start - diff_stop) / (2 * travel)
 psi      = atan(tan(psi))
 ```
 
-`diff` is `gL - gR`, and `travel` is `rev_start_rear_mm - rear_mm`. The 2 is
-there because the two gaps move in opposite directions during a straight
-reverse: one sensor swings toward its wall by `travel * sin(psi)` while the
-other swings away by the same amount, so the difference changes twice as fast
-as either gap. The result is clamped to `+/-0.84`, which is `tan(40 deg)`.
+`diff` is `gL - gR`, `diff_start` is the pair sampled when the leg began,
+`diff_stop` is the pair at the stop, and `travel` is
+`rev_start_rear_mm - rear_mm`. Start minus stop, because a nose-right car
+shrinks its difference.
 
-The estimate needs 25 mm of travel, or 15 mm if the leg was stopped early by
-the wall guard or the stall detector. Below that the previous leg's angle is
-used, and the guard runs on `0` until one exists.
+The same 10 degree leg, in the numbers the code sees:
+
+| step | value |
+| --- | --- |
+| travel | 120 mm |
+| change in each gap, `120 * tan(10 deg)` | 21.2 mm |
+| change in `diff`, twice that | 42.3 mm |
+| `diff_start` → `diff_stop` | `-10` → `-52` mm |
+| slope, `(-10 - (-52)) / (2 * 120)` | 0.175 |
+| `atan(0.175)` | 9.9 degrees |
+
+A car that reversed straight keeps its difference, so `-10` → `-10` gives a
+slope of 0 and psi of 0. The other example to keep in mind is how little signal a
+small angle leaves: at 3 degrees the same 120 mm leg only moves `diff` by
+`2 * 120 * tan(3 deg) = 12.6 mm`, which is the same order as sensor noise. That
+is why the estimate needs a span of travel before it is believed: 25 mm
+(`MIN_REVERSE_SPAN_MM`), or 15 mm (`LIVE_SLOPE_SPAN_MM`) when the wall guard or
+the stall detector cut the leg short. Below the span the previous leg's angle
+stands, and until one exists the guard runs on `0`.
+
+The result is clamped to `+/-0.84`, which is `tan(40 deg)`; steeper than that is
+not a pose the car is parked in. A nudge leg never updates psi, because pulling
+straight back from the wall is not a reverse leg at all.
 
 ### Why does the slope ignore the 80 mm sensor stagger?
 
@@ -341,3 +374,105 @@ a pose it never reached.
 `start()` checks `rear_mm` against the target before assigning a leg. If the car
 is already at 100 mm or closer, it brakes and settles instead of reversing into
 the wall.
+
+## The WebUI map
+
+### Where does the map get its data?
+
+Nowhere new. The board sends the same JSON at 10 Hz for the number cells and the
+traces, and the page draws the map from `gL`, `gR`, `rear`, `rearTarget`, `diff`,
+`yaw` and `state` in that frame. There is no map endpoint, no second sensor read
+and no firmware state behind it, which also means a stale frame is stale in the
+numbers, the traces and the map at the same time.
+
+`src/dashboard_html.h` is the whole feature: markup, styles and the `drawMap()`
+renderer. No line outside that header changed.
+
+### Which frame is the map drawn in?
+
+The bay, not the car. The origin is the middle of the rear wall, `+X` to the
+right, `+Z` forward, both in millimetres, and the rear wall itself sits on
+`Z = 0`. The car then moves and rotates inside a bay that stays put, which is
+what makes a leg readable: the picture shows where the car ended up, not just
+its own four numbers.
+
+`drawMap()` builds that placement from the same geometry the controller uses:
+
+| what | how it is placed |
+| --- | --- |
+| psi | `yaw` from telemetry, in degrees, `c = cos(psi)`, `s = sin(psi)` |
+| car centre, `Zc` | `(rear + 117) * max(0.35, c)` — the rear ray must be `rear` long and land on `Z = 0`, and 117 is `234 / 2` |
+| car centre, `Xc` | `((gL - gR) * c - 56 * s) / 2` — the inverse of the controller's `corr_diff = raw_diff - 56 tan(psi)` |
+| left wall | `Xc - (47.5 + gL) * c + 12 * s` |
+| right wall | `Xc + (47.5 + gR) * c + 68 * s` |
+| rear wall, target | `Z = 0` and `Z = rearTarget`, drawn across the whole frame |
+
+47.5 is half the 95 mm sensor span, and `-12` and `+68` are the two sensor
+stations relative to the body centre, the same numbers the stagger coefficient is
+built from. The walls are drawn where that frame's rays hit them, so in a valid
+frame each ray ends exactly on its own wall; the picture cannot disagree with the
+readings it was drawn from.
+
+The lateral sign follows the firmware: psi positive means nose right, so the
+tail sits left of the bay centre and the picture tilts the same way the estimator
+says the car is tilted.
+
+### Why is the bay fixed instead of the car?
+
+Because every error the machine acts on is defined in the bay, not on the car:
+`diff` is a distance to the walls, `rear` is a distance to the back wall, and psi
+is the angle between the body and the bay. A car-centred view would pin the
+largest object on screen and hide exactly the drift the run is about.
+
+### Why does a wall move between two frames?
+
+It does not move in the bay frame; its position is recomputed from each frame's
+distances, so it jumps when a new reading differs. Two consequences worth knowing
+when reading the map: a wall can be drawn where the car has already been, and a
+side with no usable reading is left out entirely. `gL >= 8000` draws no left wall
+and no left ray, so a missing wall is missing information, not an open bay.
+
+### What is the dashed box inside the car?
+
+The 95 mm sensor span, drawn from the two side sensor faces through the body.
+The body is 170 mm across, so each tire sits `(170 - 95) / 2 = 37.5 mm` outboard
+of its sensor. A wall line that falls inside the body outline is therefore a tire
+on the wall, which is the one collision the gap sensors cannot report.
+
+The arrow inside the body runs from 30 mm behind the centre to 90 mm ahead of
+it, so nose and tail are never in question at a glance.
+
+### Why is the bay centreline not exactly halfway between the walls?
+
+The car's offset is placed with the controller's own `56 * tan(psi)`, and 56 mm
+is the sum of the two sensor offsets (`-12 + 68`), not the 80 mm that separates
+their stations. The two walls therefore straddle `X = 0` to within
+`12 * sin(psi)` mm — 3 mm at 15 degrees, 6 mm at 30. The alternative, using 80,
+would centre the picture and put the car where the controller does not think it
+is, so the map keeps the controller's number.
+
+### Why does the car not shrink when it is far from the walls?
+
+The frame is fitted to the walls, the car corners and a floor of 520 mm of width
+by 520 mm of depth, and one scale is used for both axes. So a distant reading
+cannot zoom in on the car, and the 170 x 234 body keeps its proportions at any
+canvas size: `W / H` stays `170 / 234` and the rear-to-wall gap in pixels is the
+same millimetres per pixel as the wall-to-wall gap.
+
+### What is drawn when a sensor has no target?
+
+The frame degrades one feature at a time instead of dropping out. A rear reading
+of 8000 mm or more draws no rear ray and no rear hit dot, and the car is placed
+as if `rear` were 250 mm so the body still has a station; the target line still
+comes from `rearTarget`. Both side gaps out of range leave the rear wall, the
+target line and the body, with no side walls and no side rays. psi is clamped
+through `max(0.35, cos(psi))`, which stops a car nearly parallel to the wall from
+collapsing the vertical scale.
+
+### How is the canvas sized and kept sharp?
+
+Each canvas matches its CSS size times `devicePixelRatio`, capped at 2, and
+redraws on `resize`. The map sits to the left of the traces on a wide screen —
+`minmax(260px, 360px)` against the rest of the row — and stacks above them under
+720 px. Only the newest telemetry frame is kept for the map; the traces keep
+their 600 samples, so the map has no history and no trails by design.
