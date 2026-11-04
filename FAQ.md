@@ -388,22 +388,21 @@ The bay. The origin is the middle of the rear wall, `+X` to the right, `+Z`
 forward, both in millimetres, and the rear wall sits on `Z = 0`. The car moves
 and rotates inside it, so the picture shows where the car ended up.
 
-`drawMap()` places everything from the same geometry the controller uses:
+`drawMap()` places the car from the same geometry the controller uses, and draws
+the bay as a fixed shape:
 
 | what | how it is placed |
 | --- | --- |
 | psi | `yaw` from telemetry, in degrees, with `c = cos(psi)`, `s = sin(psi)` |
-| car centre, `Zc` | `(rear + 117) * max(0.35, c)`, so the `rear` ray lands on `Z = 0`, with 117 = `234 / 2` |
+| car centre, `Zc` | `(rear + 117) * max(0.35, c)`, which leaves the rear face `rear` mm from the bay's back wall, with 117 = `234 / 2` |
 | car centre, `Xc` | `((gL - gR) * c - 56 * s) / 2`, the inverse of the controller's `corr_diff = raw_diff - 56 * tan(psi)` |
-| left wall | `Xc - (47.5 + gL) * c + 12 * s` |
-| right wall | `Xc + (47.5 + gR) * c + 68 * s` |
-| rear wall, target | `Z = 0` and `Z = rearTarget`, drawn across the whole frame |
+| bay | a fixed U, 400 mm wide by 400 mm deep: back wall on `Z = 0`, sides at `X = -200` and `X = +200`, open at the front |
+| target | dashed across the bay at `Z = rearTarget` |
+| rays | mounted at each sensor station, pointing the way that sensor looks, with the reading as their length |
 
 47.5 is half the 95 mm sensor span, and `-12` and `+68` are the two sensor
 stations relative to the body centre, the same numbers the stagger coefficient is
-built from. The walls are drawn where that frame's rays hit them, so in a valid
-frame each ray ends on its own wall and the picture agrees with the readings it
-came from.
+built from.
 
 The sign matches the firmware: psi positive is nose right, so the tail sits left
 of the bay centre and the picture tilts the way the estimator says the car is
@@ -416,12 +415,15 @@ walls, `rear` is a distance to the back wall, and psi is the angle between body
 and bay. A car-centred view would pin the largest object on screen and hide the
 drift the run is about.
 
-### Why does a wall move between two frames?
+### Why do the side walls not follow the gaps?
 
-It does not move in the bay frame. Its position is recomputed from each frame's
-distances, so it jumps when a new reading differs. A wall can therefore be drawn
-where the car has already been, and a side with no usable reading is left out
-entirely: `gL >= 8000` draws no left wall and no left ray.
+They are a reference box at a fixed 400 mm, so the picture has the same scale in
+every frame. The readings live in the dashed rays: each one is as long as its
+sensor measured, and stops in open space when that is what the distance says. At
+zero yaw a side ray only reaches its wall when the two gaps add up to 305 mm,
+since the box leaves 200 mm to each side of the centre and each sensor face sits
+47.5 mm inside the body. The back wall is the real one: `Zc` is built so the rear
+ray always ends on it.
 
 ### What is the dashed box inside the car?
 
@@ -432,30 +434,24 @@ the one collision the gap sensors cannot report.
 
 The arrow inside the body runs from 30 mm behind the centre to 90 mm ahead of it.
 
-### Why is the bay centreline not exactly halfway between the walls?
-
-The car's offset is placed with the controller's own `56 * tan(psi)`. That 56 mm
-is the sum of the two sensor offsets (`-12 + 68`), while the stations themselves
-are 80 mm apart. The two walls therefore straddle `X = 0` to within
-`12 * sin(psi)` mm: 3 mm at 15 degrees, 6 mm at 30.
-
 ### Why does the car not shrink when it is far from the walls?
 
-The frame is fitted to the walls, the car corners and a floor of 520 mm of width
-by 520 mm of depth, with one scale for both axes. A distant reading cannot zoom
-in on the car, and the 170 x 234 body keeps its proportions at any canvas size:
-`W / H` stays `170 / 234`, and the rear-to-wall gap uses the same millimetres per
-pixel as the wall-to-wall gap.
+The 400 mm box alone sets the scale, which is one value for both axes and the
+same in every frame, so the 170 x 234 body never changes size or proportion and
+`W / H` stays `170 / 234`. A car further out than the box simply leaves the top
+of the picture: at `rear = 350 mm` only the tail is on screen, and at 500 mm the
+car is off it. The box is 400 mm deep and the body is 234 mm long, so the whole
+car fits while the rear stays under about 166 mm.
 
 ### What is drawn when a sensor has no target?
 
-The frame keeps drawing, with features dropping out one at a time. A rear reading
-of 8000 mm or more draws no rear ray and no rear hit dot, and the car is placed
-as if `rear` were 250 mm so the body still has a station; the target line still
-comes from `rearTarget`. Both side gaps out of range leave the rear wall, the
-target line and the body, with no side walls and no side rays. psi enters through
-`max(0.35, cos(psi))`, which stops a car nearly parallel to the wall from
-collapsing the vertical scale.
+Features drop out one at a time and the box stays. A rear reading of 8000 mm or
+more draws no rear ray and no hit dot, and the car is placed as if `rear` were
+250 mm so the body still has a station; the target line still comes from
+`rearTarget`. Both side gaps out of range drop the two side rays and leave the
+box, the target line and the body. psi enters through `max(0.35, cos(psi))`,
+which stops a car nearly parallel to the wall from collapsing the vertical
+scale.
 
 ### How is the canvas sized and kept sharp?
 

@@ -81,6 +81,7 @@ static const char DASHBOARD_HTML[] PROGMEM = R"HTML(<!doctype html>
 <div class="viz">
   <div>
     <div class="legend">
+      <span><i style="background:#5c6b7a"></i>bay 400×400 mm</span>
       <span><i style="background:#2d6cdf"></i>car 170×234 mm</span>
       <span><i style="background:#5fd38b"></i>gL</span>
       <span><i style="background:#7aa2f7"></i>gR</span>
@@ -147,10 +148,11 @@ const SENSOR_SPAN_HALF_MM = 47.5; // SIDE_SENSOR_SPAN_MM / 2
 const LEFT_Z_MM = -12;           // 67 mm ahead of the axle - 79 mm centre offset
 const RIGHT_Z_MM = 68;           // 147 mm ahead of the axle - 79 mm centre offset
 const REAR_Z_MM = -HALF_L_MM;    // rear bumper face
-const STAGGER_MM = 56;           // LEFT_Z_MM + RIGHT_Z_MM, the firmware's stagger
+const STAGGER_MM = LEFT_Z_MM + RIGHT_Z_MM;  // 56, the firmware's stagger coefficient
 const NOMINAL_REAR_MM = 250;     // drawn when the rear sensor has no target
-const BAY_MIN_W_MM = 520;        // narrowest bay the map shows before zooming out
-const BAY_MIN_DEPTH_MM = 520;
+const BAY_W_MM = 400;            // fixed drawn bay, one scale for every frame
+const BAY_DEPTH_MM = 400;
+const BAY_COLOUR = '#5c6b7a';    // the fixed box, so green and blue stay readings
 const FONT = '10px -apple-system, "Segoe UI", Roboto, sans-serif';
 
 // One band per quantity, fixed ranges so two runs can be compared by eye. The
@@ -381,9 +383,10 @@ function draw() {
   });
 }
 
-// The bay, not the car, is the fixed frame: +X right, +Z forward, origin at the
-// middle of the rear wall. Walls are placed where the sensor rays put them, so
-// in a validated frame each ray ends exactly on its own wall.
+// The drawn bay is fixed: +X right, +Z forward, origin at the middle of the rear
+// wall, a U of BAY_W_MM by BAY_DEPTH_MM at one constant scale. Readings move the
+// car inside it, and the dashed rays end at their measured length, so a ray only
+// touches a wall when the reading says it should.
 function drawMap() {
   const [w, h] = fit(mapCanvas, mapCtx);
   const g = mapCtx;
@@ -405,29 +408,21 @@ function drawMap() {
   // collapse the frame.
   const Zc = (rearMm + HALF_L_MM) * Math.max(0.35, c);
 
-  // Two walls fix the lateral offset. The stagger term is the firmware's own, so
-  // the map and the controller agree about which way is straight.
+  // The gap pair fixes the lateral offset. The stagger term is the firmware's
+  // own, so the map and the controller agree about which way is straight.
   let Xc = 0;
-  let wallL = null;
-  let wallR = null;
   if (hasLeft && hasRight) Xc = ((gL - gR) * c - STAGGER_MM * s) / 2;
-  if (hasLeft) wallL = Xc - (SENSOR_SPAN_HALF_MM + gL) * c - LEFT_Z_MM * s;
-  if (hasRight) wallR = Xc + (SENSOR_SPAN_HALF_MM + gR) * c + RIGHT_Z_MM * s;
 
   const carPt = (xc, zc) => [Xc + xc * c + zc * s, Zc - xc * s + zc * c];
   const corners = [carPt(-HALF_W_MM, REAR_Z_MM), carPt(HALF_W_MM, REAR_Z_MM),
                    carPt(HALF_W_MM, HALF_L_MM), carPt(-HALF_W_MM, HALF_L_MM)];
 
-  // One millimetre gets one scale on both axes, so the 170x234 body never skews.
-  const xs = [-BAY_MIN_W_MM / 2, BAY_MIN_W_MM / 2];
-  const zs = [-30, Math.max(BAY_MIN_DEPTH_MM, Zc + 160)];
-  for (const p of corners) { xs.push(p[0]); zs.push(p[1]); }
-  if (wallL !== null) xs.push(wallL);
-  if (wallR !== null) xs.push(wallR);
-  const xMin = Math.min(...xs);
-  const xMax = Math.max(...xs);
-  const zMin = Math.min(...zs);
-  const zMax = Math.max(...zs);
+  // The box alone sets the scale, so it is identical in every frame. Anything
+  // past its edges is clipped by the canvas.
+  const xMin = -BAY_W_MM / 2;
+  const xMax = BAY_W_MM / 2;
+  const zMin = 0;
+  const zMax = BAY_DEPTH_MM;
   const pad = 14;
   const scale = Math.min((w - 2 * pad) / (xMax - xMin), (h - 2 * pad) / (zMax - zMin));
   const ox = (w - (xMax - xMin) * scale) / 2;
@@ -458,12 +453,14 @@ function drawMap() {
   g.stroke();
   g.restore();
 
-  // Rear wall, then the stop distance it is aiming for.
-  g.strokeStyle = '#e0af68';
+  // The bay itself: one U, open at the front, at a position that never changes.
+  g.strokeStyle = BAY_COLOUR;
   g.lineWidth = 2.5;
   g.beginPath();
-  g.moveTo(mx(xMin), my(0));
+  g.moveTo(mx(xMin), my(zMax));
+  g.lineTo(mx(xMin), my(0));
   g.lineTo(mx(xMax), my(0));
+  g.lineTo(mx(xMax), my(zMax));
   g.stroke();
   if (d) {
     const ty = my(d.rearTarget);
@@ -480,22 +477,6 @@ function drawMap() {
     g.textAlign = 'right';
     g.textBaseline = 'bottom';
     g.fillText('target ' + d.rearTarget + ' mm', mx(xMax) - 2, ty - 2);
-  }
-
-  g.lineWidth = 2.5;
-  if (wallL !== null) {
-    g.strokeStyle = '#5fd38b';
-    g.beginPath();
-    g.moveTo(mx(wallL), my(0));
-    g.lineTo(mx(wallL), my(zMax));
-    g.stroke();
-  }
-  if (wallR !== null) {
-    g.strokeStyle = '#7aa2f7';
-    g.beginPath();
-    g.moveTo(mx(wallR), my(0));
-    g.lineTo(mx(wallR), my(zMax));
-    g.stroke();
   }
 
   const tracePoly = (list) => {
